@@ -183,6 +183,8 @@ print("Expectations calculated! This took {:.2f} seconds".format(time() - ti))
 print('All finished. Total time was {:.2f} seconds using {:d} threads'.format((time() - t_init), threads))
 
 
+
+"""Plot current and HHG spectrum"""
 def spectrum_welch(at, delta):
     return signal.welch(at, 1. / delta, nperseg=len(at), scaling='spectrum')
 
@@ -232,6 +234,8 @@ plt.ylabel('HHG spectra')
 # plt.legend(loc='upper right')
 plt.show()
 
+
+"""Graph of lattice"""
 # import networkx as nx # networkx package, see https://networkx.github.io/documentation/stable/
 # import matplotlib.pyplot as plt # plotting library
 # m = 2  # number of rows of hexagons in the lattice
