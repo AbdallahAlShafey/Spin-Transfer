@@ -1,0 +1,255 @@
+##########################################################
+# Hubbard model simulation with interface and            #
+#  spin- orbit coupling. For details on SO COUPLING, see #
+# Z. Phys. B - Condensed Matter 49, 313-317 (1983)       #
+##########################################################
+from __future__ import print_function, division
+import os
+import sys
+
+"""Open MP and MKL should speed up the time required to run these simulations!"""
+# threads = sys.argv[1]
+threads = 4
+os.environ['OMP_NUM_THREADS'] = '{}'.format(threads)
+os.environ['MKL_NUM_THREADS'] = '{}'.format(threads)
+# line 4 and line 5 below are for development purposes and can be removed
+
+from quspin.operators import hamiltonian, exp_op, quantum_operator  # operators
+from quspin.basis import tensor_basis, spin_basis_1d, spinful_fermion_basis_1d
+from quspin.tools.measurements import obs_vs_time  # calculating dynamics
+import numpy as np  # general math functions
+from scipy.sparse.linalg import eigsh
+from time import time  # tool for calculating computation time
+import matplotlib.pyplot as plt  # plotting library
+
+sys.path.append('../')
+from Kondo_tools import parameter_instantiate as hhg  # Used for scaling units.
+t_init = time()
+
+#############################################################################
+# This model labels lattice sites as in this following graph:               #
+#                                                                           #
+#                     = 1 = 3 = 5 = 7 = 9 =                                 #
+#                       |   |   |   |   |                                   #
+#                     - 0 - 2 - 4 - 6 - 8 -                                 #
+#                                                                           #
+# where  - : tc      (hopping strength in the bottom Cr rung)               #
+#        = : tp      (hopping strength in the top Pd rung)                  #
+#        | : g       (hopping strength between rungs)                       #
+#############################################################################
+
+# Boundary conditions are set to be PBC along the leg and OBC perpendicular.
+
+"""Hubbard model Parameters"""
+L = 5 # system size
+N_sites = 2 * L  # number of sites since it's a two-leg ladder
+N_up = N_sites // 2  # number of fermions with spin up
+N_down = N_sites // 2  # number of fermions with spin down
+N = N_up + N_down  # number of particles
+tp = 0.568  # hopping in Pd layer
+Jij = 0.00517 # spin-spin interaction
+Kijk = 0.00339 # Kondo interaction
+pbc = True
+
+"""Laser pulse parameters"""
+field = 32.9  # field angular frequency THz
+F0 = 10  # Field amplitude MV/cm
+a = 4  # Lattice constant Angstroms
+
+"""instantiate parameters with proper unit scaling. In this case everything is scaled to units of t_0"""
+lat = hhg(field=field, nup=N_up, ndown=N_down, nx=N_sites//2, ny=2, Jij=Jij, Kijk=Kijk, tp=tp, F0=F0, a=a, pbc=pbc)
+
+"""Define e^i*phi for later dynamics. Important point here is that for later implementations of tracking, we
+will pass phi as a global variable that will be modified as appropriate during evolution"""
+
+def phi(current_time):
+    phi = (lat.a * lat.F0 / lat.field) * (np.sin(lat.field * current_time / (2. * cycles)) ** 2.) * np.sin(
+        lat.field * current_time)
+    return phi
+
+
+def expiphi(current_time):
+    phi = (lat.a * lat.F0 / lat.field) * (np.sin(lat.field * current_time / (2. * cycles)) ** 2.) * np.sin(
+        lat.field * current_time)
+    return np.exp(1j * phi)
+
+
+def expiphiconj(current_time):
+    phi = (lat.a * lat.F0 / lat.field) * (np.sin(lat.field * current_time / (2. * cycles)) ** 2.) * np.sin(
+        lat.field * current_time)
+    return np.exp(-1j * phi)
+
+"""This is used for setting up Hamiltonian in Quspin."""
+dynamic_args = []
+
+"""System Evolution Time"""
+cycles = 10  # time in cycles of field frequency
+n_steps = 2000
+start = 0
+stop = cycles / lat.freq
+times, delta = np.linspace(start, stop, num=n_steps, endpoint=True, retstep=True)
+
+"""create basis"""
+basis_fermion = spinful_fermion_basis_1d(N_sites, Nf=(N_up, N_down))
+basis_spin = spin_basis_1d(L=N_sites)
+# print(basis_spin)
+# print(basis_fermion)
+basis = tensor_basis(basis_fermion, basis_spin)
+# print(basis)
+
+"""building model"""
+"""add static lists"""
+int_list = [[0.5 * Jij, i, (i+2) % N_sites] for i in range(0, N_sites, 2)]
+
+static_Hamiltonian_list = [
+    ["||zz", int_list],
+    ["||xx", int_list],
+    ["||yy", int_list]
+]
+
+"""add dynamic lists"""
+# Hopping for Pd layer
+hop_right = [[lat.tp, i, (i + 2) % N_sites] for i in range(1, N_sites, 2)]
+hop_left = [[-lat.tp, i, (i + 2) % N_sites] for i in range(1, N_sites, 2)]
+
+# Kondo interaction
+Kondo1x = [[lat.Kijk, (i + 1), (i + 3) % N_sites, i] for i in range(0, N_sites, 2)]
+Kondo2x = [[lat.Kijk, (i + 3) % N_sites, (i + 1), i] for i in range(0, N_sites, 2)]
+Kondo1y = [[-1j * lat.Kijk, (i + 1), (i + 3) % N_sites, i] for i in range(0, N_sites, 2)]
+Kondo2y = [[1j * lat.Kijk, (i + 3) % N_sites, (i + 1), i] for i in range(0, N_sites, 2)]
+Kondo1z = [[lat.Kijk, (i + 1), (i + 3) % N_sites, i] for i in range(0, N_sites, 2)]
+Kondo2z = [[-lat.Kijk, (i + 3) % N_sites, (i + 1), i] for i in range(0, N_sites, 2)]
+
+Kondo1xc = [[-lat.Kijk, (i + 1), (i + 3) % N_sites, i] for i in range(0, N_sites, 2)]
+Kondo2xc = [[-lat.Kijk, (i + 3) % N_sites, (i + 1), i] for i in range(0, N_sites, 2)]
+Kondo1yc = [[1j * lat.Kijk, (i + 1), (i + 3) % N_sites, i] for i in range(0, N_sites, 2)]
+Kondo2yc = [[-1j * lat.Kijk, (i + 3) % N_sites, (i + 1), i] for i in range(0, N_sites, 2)]
+Kondo1zc = [[-lat.Kijk, (i + 1), (i + 3) % N_sites, i] for i in range(0, N_sites, 2)]
+Kondo2zc = [[lat.Kijk, (i + 3) % N_sites, (i + 1), i] for i in range(0, N_sites, 2)]
+
+
+dynamic_Hamiltonian_list = [
+    ["+-||", hop_left, expiphiconj, dynamic_args],  # up hopping to the left for Pd
+    ["-+||", hop_right, expiphi, dynamic_args],     # up hopping to the right for Pd
+    ["|+-|", hop_left, expiphiconj, dynamic_args],  # down hopping to the left for Pd
+    ["|-+|", hop_right, expiphi, dynamic_args],     # down hopping to the right for Pd
+
+    ["+|-|x", Kondo1x, expiphiconj, dynamic_args],  # x Kondo interaction 1st term
+    ["-|+|x", Kondo2x, expiphiconj, dynamic_args],  # x Kondo interaction 2nd term
+    ["+|-|y", Kondo1y, expiphiconj, dynamic_args],  # y Kondo interaction 1st term
+    ["-|+|y", Kondo2y, expiphiconj, dynamic_args],  # y Kondo interaction 2nd term
+    ["+-||z", Kondo1z, expiphiconj, dynamic_args],  # z Kondo interaction 1st term
+    ["|+-|z", Kondo2z, expiphiconj, dynamic_args],  # z Kondo interaction 2nd term
+
+    ["-|+|x", Kondo1xc, expiphi, dynamic_args],     # h.c.
+    ["+|-|x", Kondo2xc, expiphi, dynamic_args],     # h.c.
+    ["-|+|y", Kondo1yc, expiphi, dynamic_args],     # h.c.
+    ["+|-|y", Kondo2yc, expiphi, dynamic_args],     # h.c.
+    ["-+||z", Kondo1zc, expiphi, dynamic_args],     # h.c.
+    ["|-+|z", Kondo2zc, expiphi, dynamic_args]      # h.c.
+]
+
+"""build the Hamiltonian for actually evolving this bastard."""
+ham = hamiltonian(static_Hamiltonian_list, dynamic_Hamiltonian_list, basis=basis)
+
+"""build up the other operator expectations here as a dictionary"""
+operator_dict = dict(H=ham)
+no_checks = dict(check_pcon=False, check_symm=False, check_herm=False)
+# hopping operators for building current. Note that the easiest way to build an operator is just to cast it as an
+# instance of the Hamiltonian class. Note in this instance the hops up and down have the e^iphi factor attached directly
+operator_dict["lhopup"] = hamiltonian([], [["+-||", hop_left, expiphiconj, dynamic_args]], basis=basis, **no_checks)
+operator_dict["lhopdown"] = hamiltonian([], [["|+-|", hop_left, expiphiconj, dynamic_args]], basis=basis, **no_checks)
+
+print(operator_dict)
+"""build ground state"""
+# TODO IMPLEMENTING AN IMAGINARY TIME EVOLUTION FOR THE GROUND STATE.
+
+print("calculating ground state")
+E, psi_0 = ham.eigsh(k=1, which='SA')
+print("ground state calculated, energy is {:.2f}".format(E[0]))
+print('evolving system')
+ti = time()
+"""evolving system. In this simple case we'll just use the built in solver"""
+psi_t = ham.evolve(psi_0, 0.0, times)
+psi_t = np.squeeze(psi_t)
+print("Evolution done! This one took {:.2f} seconds".format(time() - ti))
+ti = time()
+expectationsu = operator_dict['lhopup'].expt_value(psi_t, times)
+expectationsd = operator_dict['lhopdown'].expt_value(psi_t, times)
+current_partial = expectationsu + expectationsd
+current = -1j * lat.a * (current_partial - current_partial.conjugate())
+
+print("Expectations calculated! This took {:.2f} seconds".format(time() - ti))
+print('All finished. Total time was {:.2f} seconds using {:d} threads'.format((time() - t_init), threads))
+
+
+def spectrum_welch(at, delta):
+    return signal.welch(at, 1. / delta, nperseg=len(at), scaling='spectrum')
+
+
+import sys
+import numpy as np
+import itertools
+import matplotlib.pyplot as plt
+import numpy.ma as ma
+from matplotlib import cm as cm
+from scipy.signal import blackman
+from scipy.signal import stft
+from scipy.signal import savgol_filter
+from scipy.interpolate import interp1d
+from scipy import signal
+
+J_field = current.real
+prev_max = 0
+
+plt.subplot(211)
+plt.plot(times, J_field)
+# plt.xlabel('Time [cycles]')
+plt.ylabel('$J(t)$')
+plt.xlabel('Time [cycles]')
+plt.legend(loc='upper right')
+
+plt.subplot(212)
+method = 'welch'
+min_spec = 20
+max_harm = 60
+gabor = 'fL'
+exact = np.gradient(J_field, delta)
+w, spec = spectrum_welch(exact, delta)
+w *= 2. * np.pi / lat.field
+plt.semilogy(w, spec, label='$J(t)$')
+axes = plt.gca()
+axes.set_xlim([0, max_harm])
+if spec.max() > prev_max:
+    prev_max=spec.max()*5
+axes.set_ylim([10 ** (-min_spec), prev_max])
+xlines = [2 * i - 1 for i in range(1, 6)]
+
+for xc in xlines:
+    plt.axvline(x=xc, color='black', linestyle='dashed')
+plt.xlabel('Harmonic Order')
+plt.ylabel('HHG spectra')
+# plt.legend(loc='upper right')
+plt.show()
+
+# import networkx as nx # networkx package, see https://networkx.github.io/documentation/stable/
+# import matplotlib.pyplot as plt # plotting library
+# m = 2  # number of rows of hexagons in the lattice
+# n = 5  # number of columns of hexagons in the lattice
+# isPBC = True # if True, use periodic boundary conditions
+# ### build graph using networkx
+# lad_graph = nx.grid_2d_graph(m, n, periodic=isPBC)
+# # label graph nodes by consecutive integers
+# lad_graph = nx.convert_node_labels_to_integers(lad_graph)
+# # set number of lattice sites
+# N = lad_graph.number_of_nodes()
+# print('Constructed periodic 2-leg-ladder geometry with 10 sites.\n'.format(N))
+# # visualise graph
+# color_map = []
+# for node in lad_graph:
+#     if node < 5:
+#         color_map.append('grey')
+#     else:
+#         color_map.append('green')
+# nx.draw(lad_graph, node_color=color_map)
+# plt.show()
