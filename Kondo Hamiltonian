@@ -41,14 +41,14 @@ t_init = time()
 # Boundary conditions are set to be PBC along the leg and OBC perpendicular.
 
 """Hubbard model Parameters"""
-L = 5 # system size
+L = 4 # system size
 N_sites = 2 * L  # number of sites since it's a two-leg ladder
 N_up = N_sites // 2  # number of fermions with spin up
 N_down = N_sites // 2  # number of fermions with spin down
 N = N_up + N_down  # number of particles
 tp = 0.568  # hopping in Pd layer
-Jij = 0.00517 # spin-spin interaction
-Kijk = 0.00339 # Kondo interaction
+Jij = 0.0517 # spin-spin interaction
+Kijk = 0.2 # Kondo interaction
 pbc = True
 
 """Laser pulse parameters"""
@@ -91,10 +91,10 @@ times, delta = np.linspace(start, stop, num=n_steps, endpoint=True, retstep=True
 
 """create basis"""
 basis_fermion = spinful_fermion_basis_1d(N_sites, Nf=(N_up, N_down))
-basis_spin = spin_basis_1d(L=N_sites)
+basis_spin = spin_basis_1d(L=N_sites, pauli=0)     # Pauli=0 means it will use spin ops rather than pauli ops.
 # print(basis_spin)
 # print(basis_fermion)
-basis = tensor_basis(basis_fermion, basis_spin)
+basis = tensor_basis(basis_spin, basis_fermion)
 # print(basis)
 
 """building model"""
@@ -102,9 +102,9 @@ basis = tensor_basis(basis_fermion, basis_spin)
 int_list = [[0.5 * Jij, i, (i+2) % N_sites] for i in range(0, N_sites, 2)]
 
 static_Hamiltonian_list = [
-    ["||zz", int_list],
-    ["||xx", int_list],
-    ["||yy", int_list]
+    ["zz||", int_list],
+    ["xx||", int_list],
+    ["yy||", int_list]
 ]
 
 """add dynamic lists"""
@@ -113,40 +113,40 @@ hop_right = [[lat.tp, i, (i + 2) % N_sites] for i in range(1, N_sites, 2)]
 hop_left = [[-lat.tp, i, (i + 2) % N_sites] for i in range(1, N_sites, 2)]
 
 # Kondo interaction
-Kondo1x = [[lat.Kijk, (i + 1), (i + 3) % N_sites, i] for i in range(0, N_sites, 2)]
-Kondo2x = [[lat.Kijk, (i + 3) % N_sites, (i + 1), i] for i in range(0, N_sites, 2)]
-Kondo1y = [[-1j * lat.Kijk, (i + 1), (i + 3) % N_sites, i] for i in range(0, N_sites, 2)]
-Kondo2y = [[1j * lat.Kijk, (i + 3) % N_sites, (i + 1), i] for i in range(0, N_sites, 2)]
-Kondo1z = [[lat.Kijk, (i + 1), (i + 3) % N_sites, i] for i in range(0, N_sites, 2)]
-Kondo2z = [[-lat.Kijk, (i + 3) % N_sites, (i + 1), i] for i in range(0, N_sites, 2)]
+Kondo1x = [[lat.Kijk, i, (i + 1), (i + 3) % N_sites] for i in range(0, N_sites, 2)]
+Kondo2x = [[lat.Kijk, i, (i + 3) % N_sites, (i + 1)] for i in range(0, N_sites, 2)]
+Kondo1y = [[-1j * lat.Kijk, i, (i + 1), (i + 3) % N_sites] for i in range(0, N_sites, 2)]
+Kondo2y = [[1j * lat.Kijk, i, (i + 3) % N_sites, (i + 1)] for i in range(0, N_sites, 2)]
+Kondo1z = [[lat.Kijk, i, (i + 1), (i + 3) % N_sites] for i in range(0, N_sites, 2)]
+Kondo2z = [[-lat.Kijk, i, (i + 3) % N_sites, (i + 1)] for i in range(0, N_sites, 2)]
 
-Kondo1xc = [[-lat.Kijk, (i + 1), (i + 3) % N_sites, i] for i in range(0, N_sites, 2)]
-Kondo2xc = [[-lat.Kijk, (i + 3) % N_sites, (i + 1), i] for i in range(0, N_sites, 2)]
-Kondo1yc = [[1j * lat.Kijk, (i + 1), (i + 3) % N_sites, i] for i in range(0, N_sites, 2)]
-Kondo2yc = [[-1j * lat.Kijk, (i + 3) % N_sites, (i + 1), i] for i in range(0, N_sites, 2)]
-Kondo1zc = [[-lat.Kijk, (i + 1), (i + 3) % N_sites, i] for i in range(0, N_sites, 2)]
-Kondo2zc = [[lat.Kijk, (i + 3) % N_sites, (i + 1), i] for i in range(0, N_sites, 2)]
+Kondo1xc = [[lat.Kijk, i, (i + 1), (i + 3) % N_sites] for i in range(0, N_sites, 2)]
+Kondo2xc = [[lat.Kijk, i, (i + 3) % N_sites, (i + 1)] for i in range(0, N_sites, 2)]
+Kondo1yc = [[1j * lat.Kijk, i, (i + 1), (i + 3) % N_sites] for i in range(0, N_sites, 2)]
+Kondo2yc = [[-1j * lat.Kijk, i, (i + 3) % N_sites, (i + 1)] for i in range(0, N_sites, 2)]
+Kondo1zc = [[-lat.Kijk, i, (i + 1), (i + 3) % N_sites] for i in range(0, N_sites, 2)]
+Kondo2zc = [[lat.Kijk, i, (i + 3) % N_sites, (i + 1)] for i in range(0, N_sites, 2)]
 
 
 dynamic_Hamiltonian_list = [
-    ["+-||", hop_left, expiphiconj, dynamic_args],  # up hopping to the left for Pd
-    ["-+||", hop_right, expiphi, dynamic_args],     # up hopping to the right for Pd
-    ["|+-|", hop_left, expiphiconj, dynamic_args],  # down hopping to the left for Pd
-    ["|-+|", hop_right, expiphi, dynamic_args],     # down hopping to the right for Pd
+    ["|+-|", hop_left, expiphiconj, dynamic_args],  # up hopping to the left for Pd
+    ["|-+|", hop_right, expiphi, dynamic_args],     # up hopping to the right for Pd
+    ["||+-", hop_left, expiphiconj, dynamic_args],  # down hopping to the left for Pd
+    ["||-+", hop_right, expiphi, dynamic_args],     # down hopping to the right for Pd
 
-    ["+|-|x", Kondo1x, expiphiconj, dynamic_args],  # x Kondo interaction 1st term
-    ["-|+|x", Kondo2x, expiphiconj, dynamic_args],  # x Kondo interaction 2nd term
-    ["+|-|y", Kondo1y, expiphiconj, dynamic_args],  # y Kondo interaction 1st term
-    ["-|+|y", Kondo2y, expiphiconj, dynamic_args],  # y Kondo interaction 2nd term
-    ["+-||z", Kondo1z, expiphiconj, dynamic_args],  # z Kondo interaction 1st term
-    ["|+-|z", Kondo2z, expiphiconj, dynamic_args],  # z Kondo interaction 2nd term
+    ["x|+|-", Kondo1x, expiphiconj, dynamic_args],  # x Kondo interaction 1st term
+    ["x|-|+", Kondo2x, expiphiconj, dynamic_args],  # x Kondo interaction 2nd term
+    ["y|+|-", Kondo1y, expiphiconj, dynamic_args],  # y Kondo interaction 1st term
+    ["y|-|+", Kondo2y, expiphiconj, dynamic_args],  # y Kondo interaction 2nd term
+    ["z|+-|", Kondo1z, expiphiconj, dynamic_args],  # z Kondo interaction 1st term
+    ["z||+-", Kondo2z, expiphiconj, dynamic_args],  # z Kondo interaction 2nd term
 
-    ["-|+|x", Kondo1xc, expiphi, dynamic_args],     # h.c.
-    ["+|-|x", Kondo2xc, expiphi, dynamic_args],     # h.c.
-    ["-|+|y", Kondo1yc, expiphi, dynamic_args],     # h.c.
-    ["+|-|y", Kondo2yc, expiphi, dynamic_args],     # h.c.
-    ["-+||z", Kondo1zc, expiphi, dynamic_args],     # h.c.
-    ["|-+|z", Kondo2zc, expiphi, dynamic_args]      # h.c.
+    ["x|-|+", Kondo1xc, expiphi, dynamic_args],     # h.c.
+    ["x|+|-", Kondo2xc, expiphi, dynamic_args],     # h.c.
+    ["y|-|+", Kondo1yc, expiphi, dynamic_args],     # h.c.
+    ["y|+|-", Kondo2yc, expiphi, dynamic_args],     # h.c.
+    ["z|-+|", Kondo1zc, expiphi, dynamic_args],     # h.c.
+    ["z||-+", Kondo2zc, expiphi, dynamic_args]      # h.c.
 ]
 
 """build the Hamiltonian for actually evolving this bastard."""
@@ -157,8 +157,8 @@ operator_dict = dict(H=ham)
 no_checks = dict(check_pcon=False, check_symm=False, check_herm=False)
 # hopping operators for building current. Note that the easiest way to build an operator is just to cast it as an
 # instance of the Hamiltonian class. Note in this instance the hops up and down have the e^iphi factor attached directly
-operator_dict["lhopup"] = hamiltonian([], [["+-||", hop_left, expiphiconj, dynamic_args]], basis=basis, **no_checks)
-operator_dict["lhopdown"] = hamiltonian([], [["|+-|", hop_left, expiphiconj, dynamic_args]], basis=basis, **no_checks)
+operator_dict["lhopup"] = hamiltonian([], [["|+-|", hop_left, expiphiconj, dynamic_args]], basis=basis, **no_checks)
+operator_dict["lhopdown"] = hamiltonian([], [["||+-", hop_left, expiphiconj, dynamic_args]], basis=basis, **no_checks)
 
 print(operator_dict)
 """build ground state"""
