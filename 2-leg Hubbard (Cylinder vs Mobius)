@@ -1,0 +1,419 @@
+##########################################################
+# Hubbard model simulation with interface and            #
+#  spin- orbit coupling. For details on SO COUPLING, see #
+# Z. Phys. B - Condensed Matter 49, 313-317 (1983)       #
+##########################################################
+from __future__ import print_function, division
+import os
+import sys
+
+"""Open MP and MKL should speed up the time required to run these simulations!"""
+# threads = sys.argv[1]
+threads = 4
+os.environ['OMP_NUM_THREADS'] = '{}'.format(threads)
+os.environ['MKL_NUM_THREADS'] = '{}'.format(threads)
+# line 4 and line 5 below are for development purposes and can be removed
+
+from quspin.operators import hamiltonian, exp_op, quantum_operator  # operators
+from quspin.basis import spinful_fermion_basis_1d  # Hilbert space basis
+from quspin.tools.measurements import obs_vs_time  # calculating dynamics
+import numpy as np  # general math functions
+from scipy.sparse.linalg import eigsh
+from time import time  # tool for calculating computation time
+import matplotlib.pyplot as plt  # plotting library
+
+sys.path.append('../')
+from tools import parameter_instantiate as hhg  # Used for scaling units.
+
+t_init = time()
+
+#############################################################################
+# This model labels lattice sites as in this following graph:               #
+#                                                                           #
+#                     = 1 = 3 = 5 = 7 = 9 =                                 #
+#                       |   |   |   |   |                                   #
+#                     - 0 - 2 - 4 - 6 - 8 -                                 #
+#                                                                           #
+# where  - : t_1      (hopping strength in the bottom rung)                 #
+#        = : t_2      (hopping strength in the top rung)                    #
+#        | : t_p      (hopping strength between rungs)                      #
+#############################################################################
+
+# Boundary conditions are set to be Mobius periodic along the leg and OBC perpendicular.
+
+"""Hubbard model Parameters"""
+L = 5  # system size
+N_sites = 2 * L  # number of sites since it's a two-leg ladder
+N_up = N_sites // 2  # number of fermions with spin up
+N_down = N_sites // 2  # number of fermions with spin down
+N = N_up + N_down  # number of particles
+t0 = 0.52  # previously defined hopping strength
+t_1 = 1 * t0  # hopping strength for leg 1
+t_2 = 1 * t0  # hopping strength for leg 2
+t_p = 0.5 * t0  # rung hopping
+SO = 0 * t0  # spin orbit coupling
+U = 0 * t0  # interaction strength
+pbc = True
+
+"""Set up the partition of the system's onsite potentials"""
+U_a = 0 * t0
+U_b = 0.5 * t0
+U = [0. for i in range(N_sites)]
+for n in range(N_sites):
+    if n % 2 == 0:
+        U[n] = U_a
+    else:
+        U[n] = U_b
+U = np.array(U)
+
+# U_a = 0 * t0
+# U_b = 0.5 * t0
+# U = [0. for i in range(N_sites)]
+# for n in range(N_sites):
+#     if n < 6:
+#         U[n] = U_a
+#     else:
+#         U[n] = U_b
+# U = np.array(U)
+# print(U)
+
+"""Laser pulse parameters"""
+field = 32.9  # field angular frequency THz
+F0 = 10  # Field amplitude MV/cm
+a = 4  # Lattice constant Angstroms
+
+"""instantiate parameters with proper unit scaling. In this case everything is scaled to units of t_0"""
+lat = hhg(field=field, nup=N_up, ndown=N_down, nx=N_sites//2, ny=2, U=U, SO=SO, t_p=t_p, t=t0, F0=F0, a=a, pbc=pbc)
+
+"""Define e^i*phi for later dynamics. Important point here is that for later implementations of tracking, we
+will pass phi as a global variable that will be modified as appropriate during evolution"""
+
+def phi(current_time):
+    phi = (lat.a * lat.F0 / lat.field) * (np.sin(lat.field * current_time / (2. * cycles)) ** 2.) * np.sin(
+        lat.field * current_time)
+    return phi
+
+
+def expiphi(current_time):
+    phi = (lat.a * lat.F0 / lat.field) * (np.sin(lat.field * current_time / (2. * cycles)) ** 2.) * np.sin(
+        lat.field * current_time)
+    return np.exp(1j * phi)
+
+
+def expiphiconj(current_time):
+    phi = (lat.a * lat.F0 / lat.field) * (np.sin(lat.field * current_time / (2. * cycles)) ** 2.) * np.sin(
+        lat.field * current_time)
+    return np.exp(-1j * phi)
+
+"""This is used for setting up Hamiltonian in Quspin."""
+dynamic_args = []
+
+"""System Evolution Time"""
+cycles = 10  # time in cycles of field frequency
+n_steps = 2000
+start = 0
+stop = cycles / lat.freq
+# stop = 0.5
+times, delta = np.linspace(start, stop, num=n_steps, endpoint=True, retstep=True)
+# print(times)
+
+"""set up parameters for saving expectations later"""
+outfile = './Data/expectations{}sites-{}up-{}down-{}t0-{}U-{}SO-{}cycles-{}steps-{}pbc.npz'.format(N_sites, N_up, N_down, t0,
+                                                                                           U, SO, cycles,
+                                                                                           n_steps, pbc)
+
+"""create basis"""
+basis = spinful_fermion_basis_1d(N_sites, Nf=(N_up, N_down))
+# print(basis)
+#
+"""building model"""
+###########################################################################
+# to give you a very rough idea, the Hamiltonian breaks down as           #
+# H=(e^(-i*phi)(-t0 + i*sigma*SO)*left_hopping ops + H.C) + U*n_up*n_down #
+###########################################################################
+hop_top = [[lat.t_p, i, (i + 1)] for i in range(0, N_sites, 2)]  # hopping to top rung
+hop_bottom = [[-lat.t_p, i, (i + 1)] for i in range(0, N_sites, 2)]  # hopping to bottom rung
+if max(lat.U):
+    int_list = [[lat.U[i], i, i] for i in range(N_sites)]  # onsite interaction
+
+    # create static lists
+    # Note that the pipe determines the spinfulness of the operator. | on the left corresponds to down spin, | on the right
+    # is for up spin. For the onsite interaction here, we have:
+    static_Hamiltonian_list = [
+        ["n|n", int_list],  # onsite interaction
+        ["+-|", hop_top],  # up hop top
+        ["-+|", hop_bottom],  # up hop bottom
+        ["|+-", hop_top],  # down hop top
+        ["|-+", hop_bottom]  # down hop bottom
+    ]
+else:
+    static_Hamiltonian_list = [
+        ["+-|", hop_top],  # up hop top
+        ["-+|", hop_bottom],  # up hop bottom
+        ["|+-", hop_top],  # down hop top
+        ["|-+", hop_bottom]  # down hop bottom
+    ]
+
+# static_Hamiltonian_list = [
+#     ["+-|", hop_top],  # up hop top
+#     ["-+|", hop_bottom],  # up hop bottom
+#     ["|+-", hop_top],  # down hop top
+#     ["|-+", hop_bottom]  # down hop bottom
+# ]
+
+"""add dynamic lists for hopping"""
+if SO:
+    print('spin orbit coupling active')
+    up_param = lat.t + 1j * lat.SO
+    down_param = up_param.conjugate()
+    # HOPPING FOR LEG 1
+    hop_right_up = [[up_param, i, (i + 2) % N_sites] for i in range(0, N_sites, 2)]  # hopping to the right, up spin PBC
+    hop_right_down = [[down_param, i, (i + 2) % N_sites] for i in range(0, N_sites, 2)]  # hopping to the right, down spin PBC
+    hop_left_up = [[-down_param, i, (i + 2) % N_sites] for i in range(0, N_sites, 2)]  # hopping to the left, up spin PBC
+    hop_left_down = [[-up_param, i, (i + 2) % N_sites] for i in range(0, N_sites, 2)]  # hopping to the left, down spin PBC
+
+    hop_right = [[lat.t, i, (i + 2) % N_sites] for i in range(0, N_sites, 2)]
+    hop_left = [[-lat.t, i, (i + 2) % N_sites] for i in range(0, N_sites, 2)]
+
+    # HOPPING FOR LEG 2
+    hop_right_up.extend([[up_param, i, (i + 2) % N_sites] for i in range(1, N_sites, 2)])
+    hop_right_down.extend([[down_param, i, (i + 2) % N_sites] for i in range(1, N_sites, 2)])
+    hop_left_up.extend([[-down_param, i, (i + 2) % N_sites] for i in range(1, N_sites, 2)])
+    hop_left_down.extend([[-up_param, i, (i + 2) % N_sites] for i in range(1, N_sites, 2)])
+
+    hop_right.extend([[lat.t, i, (i + 2) % N_sites] for i in range(1, N_sites, 2)])
+    hop_left.extend([[-lat.t, i, (i + 2) % N_sites] for i in range(1, N_sites, 2)])
+
+    # HOPPING PERPENDICULAR
+    # hop_top = ([[lat.t_p, i, (i + 1)] for i in range(0, N_sites, 2)])
+    # hop_bottom = ([[-lat.t_p, i, (i + 1)] for i in range(0, N_sites, 2)])
+
+    """Add periodic boundaries"""
+    # if lat.pbc:
+    #     hop_right_up.append([up_param, L - 1, 0])
+    #     hop_right_down.append([down_param, L - 1, 0])
+    #
+    #     hop_left_up.append([-down_param, L - 1, 0])
+    #     hop_left_down.append([-up_param, L - 1, 0])
+    #
+    #     hop_right.append([lat.t, L - 1, 0])
+    #     hop_left.append([-lat.t, L - 1, 0])
+
+    dynamic_Hamiltonian_list = [
+        ["+-|", hop_left_up, expiphiconj, dynamic_args],  # up hop left
+        ["-+|", hop_right_up, expiphi, dynamic_args],  # up hop right
+        ["|+-", hop_left_down, expiphiconj, dynamic_args],  # down hop left
+        ["|-+", hop_right_down, expiphi, dynamic_args],  # down hop right
+    ]
+else:
+    # HOPPING FOR LEG 1
+    hop_right = [[lat.t, i, (i + 2) % N_sites] for i in range(0, N_sites, 2)]  # hopping to the right, PBC
+    # hop_right.extend([[lat.t, i, (i + 3) % N_sites] for i in range(N_sites-2, N_sites-1)]) # Mobius condition
+    hop_left = [[-lat.t, i, (i + 2) % N_sites] for i in range(0, N_sites, 2)]  # hopping to the left, PBC
+    # hop_left.extend([[-lat.t, i, (i + 3) % N_sites] for i in range(N_sites - 2, N_sites - 1)]) # Mobius condition
+    # # HOPPING FOR LEG 2
+    hop_right_l2 = [[lat.t, i, (i + 2) % N_sites] for i in range(1, N_sites, 2)]  # hopping to the right, PBC
+    # hop_right_l2.extend([[lat.t, i, (i + 1) % N_sites] for i in range(N_sites-1, N_sites)]) # Mobius condition
+    hop_left_l2 = [[-lat.t, i, (i + 2) % N_sites] for i in range(1, N_sites, 2)]  # hopping to the left, PBC
+    # hop_left_l2.extend([[-lat.t, i, (i + 1) % N_sites] for i in range(N_sites - 1, N_sites)]) # Mobius condition
+    # HOPPING PERPENDICULAR
+    hop_top = [[lat.t_p, i, (i + 1)] for i in range(0, N_sites-1, 2)]  # hopping to top rung
+    hop_bottom = [[-lat.t_p, i, (i + 1)] for i in range(1, N_sites-2, 2)]  # hopping to bottom rung
+    """Add periodic boundaries"""
+    # if lat.pbc:
+    #     hop_right.append([lat.t, L - 1, 0])
+    #     hop_left.append([-lat.t, L - 1, 0])
+    dynamic_Hamiltonian_list = [
+        ["+-|", hop_left, expiphiconj, dynamic_args],  # up hop left
+        ["-+|", hop_right, expiphi, dynamic_args],  # up hop right
+        ["|+-", hop_left, expiphiconj, dynamic_args],  # down hop left
+        ["|-+", hop_right, expiphi, dynamic_args],  # down hop right
+        ["+-|", hop_left_l2, expiphiconj, dynamic_args],  # up hop left           #NEW
+        ["-+|", hop_right_l2, expiphi, dynamic_args],  # up hop right             #NEW
+        ["|+-", hop_left_l2, expiphiconj, dynamic_args],  # down hop left         #NEW
+        ["|-+", hop_right_l2, expiphi, dynamic_args],  # down hop right           #NEW
+    ]
+    # HOPPING FOR LEG 1
+    Hop_right = [[lat.t, i, (i + 2) % N_sites] for i in range(0, N_sites-3, 2)]  # hopping to the right, PBC
+    Hop_right.extend([[lat.t, i, (i + 3) % N_sites] for i in range(N_sites-2, N_sites-1)]) # Mobius condition
+    Hop_left = [[-lat.t, i, (i + 2) % N_sites] for i in range(0, N_sites-3, 2)]  # hopping to the left, PBC
+    Hop_left.extend([[-lat.t, i, (i + 3) % N_sites] for i in range(N_sites - 2, N_sites - 1)]) # Mobius condition
+    # # HOPPING FOR LEG 2
+    Hop_right_l2 = [[lat.t, i, (i + 2) % N_sites] for i in range(1, N_sites-2, 2)]  # hopping to the right, PBC
+    Hop_right_l2.extend([[lat.t, i, (i + 1) % N_sites] for i in range(N_sites-1, N_sites)]) # Mobius condition
+    Hop_left_l2 = [[-lat.t, i, (i + 2) % N_sites] for i in range(1, N_sites-2, 2)]  # hopping to the left, PBC
+    Hop_left_l2.extend([[-lat.t, i, (i + 1) % N_sites] for i in range(N_sites - 1, N_sites)]) # Mobius condition
+    # HOPPING PERPENDICULAR
+    hop_top = [[lat.t_p, i, (i + 1)] for i in range(0, N_sites-1, 2)]  # hopping to top rung
+    hop_bottom = [[-lat.t_p, i, (i + 1)] for i in range(1, N_sites-2, 2)]  # hopping to bottom rung
+    """Add periodic boundaries"""
+    # if lat.pbc:
+    #     hop_right.append([lat.t, L - 1, 0])
+    #     hop_left.append([-lat.t, L - 1, 0])
+    dynamic_Hamiltonian_list2 = [
+        ["+-|", Hop_left, expiphiconj, dynamic_args],  # up hop left
+        ["-+|", Hop_right, expiphi, dynamic_args],  # up hop right
+        ["|+-", Hop_left, expiphiconj, dynamic_args],  # down hop left
+        ["|-+", Hop_right, expiphi, dynamic_args],  # down hop right
+        ["+-|", Hop_left_l2, expiphiconj, dynamic_args],  # up hop left           #NEW
+        ["-+|", Hop_right_l2, expiphi, dynamic_args],  # up hop right             #NEW
+        ["|+-", Hop_left_l2, expiphiconj, dynamic_args],  # down hop left         #NEW
+        ["|-+", Hop_right_l2, expiphi, dynamic_args],  # down hop right           #NEW
+    ]
+
+print(hop_right)
+print(hop_left)
+print(hop_right_l2)
+print(hop_left_l2)
+
+print(Hop_right)
+print(Hop_left)
+print(Hop_right_l2)
+print(Hop_left_l2)
+# After creating the site lists, we attach an operator and a time-dependent function to them
+
+
+"""build the Hamiltonian for actually evolving this bastard."""
+# Hamiltonian builds an operator, the first argument is always the static operators, then the dynamic operators.
+ham = hamiltonian(static_Hamiltonian_list, dynamic_Hamiltonian_list, basis=basis)
+ham2 = hamiltonian(static_Hamiltonian_list, dynamic_Hamiltonian_list2, basis=basis)
+
+"""build up the other operator expectations here as a dictionary"""
+operator_dict = dict(H=ham)
+operator_dict2 = dict(H=ham2)
+no_checks = dict(check_pcon=False, check_symm=False, check_herm=False)
+# hopping operators for building current. Note that the easiest way to build an operator is just to cast it as an
+# instance of the Hamiltonian class. Note in this instance the hops up and down have the e^iphi factor attached directly
+operator_dict["lhopup"] = hamiltonian([], [["+-|", hop_left, expiphiconj, dynamic_args]], basis=basis, **no_checks)
+operator_dict["lhopdown"] = hamiltonian([], [["|+-", hop_left, expiphiconj, dynamic_args]], basis=basis, **no_checks)
+operator_dict["thopup"] = hamiltonian([["+-|", hop_top]], [], basis=basis, **no_checks)                  # NEW
+operator_dict["thopdown"] = hamiltonian([["|+-", hop_top]], [], basis=basis, **no_checks)                # NEW
+operator_dict["lhopup_l2"] = hamiltonian([], [["+-|", hop_left_l2, expiphiconj, dynamic_args]], basis=basis, **no_checks)           # NEW
+operator_dict["lhopdown_l2"] = hamiltonian([], [["|+-", hop_left_l2, expiphiconj, dynamic_args]], basis=basis, **no_checks)         # NEW
+
+operator_dict2["lhopup"] = hamiltonian([], [["+-|", Hop_left, expiphiconj, dynamic_args]], basis=basis, **no_checks)
+operator_dict2["lhopdown"] = hamiltonian([], [["|+-", Hop_left, expiphiconj, dynamic_args]], basis=basis, **no_checks)
+operator_dict2["thopup"] = hamiltonian([["+-|", hop_top]], [], basis=basis, **no_checks)                  # NEW
+operator_dict2["thopdown"] = hamiltonian([["|+-", hop_top]], [], basis=basis, **no_checks)                # NEW
+operator_dict2["lhopup_l2"] = hamiltonian([], [["+-|", Hop_left_l2, expiphiconj, dynamic_args]], basis=basis, **no_checks)           # NEW
+operator_dict2["lhopdown_l2"] = hamiltonian([], [["|+-", Hop_left_l2, expiphiconj, dynamic_args]], basis=basis, **no_checks)         # NEW
+# Add individual spin expectations
+# for j in range(N_sites):
+#     # spin up densities for each site
+#     operator_dict["nup" + str(j)] = hamiltonian([["n|", [[1.0, j]]]], [], basis=basis, **no_checks)
+#     # spin down
+#     operator_dict["ndown" + str(j)] = hamiltonian([["|n", [[1.0, j]]]], [], basis=basis, **no_checks)
+#     # doublon densities
+#     operator_dict["D" + str(j)] = hamiltonian([["n|n", [[1.0, j, j]]]], [], basis=basis, **no_checks)
+print(operator_dict)
+"""build ground state"""
+# TODO IMPLEMENTING AN IMAGINARY TIME EVOLUTION FOR THE GROUND STATE.
+########################################################################################################################
+# GIANT HEALTH WARNING. FOR SOME SITE NUMBERS AND FILLINGS, THIS GROUND STATE IS HIGHLY DEGENERATE. THIS METHOD ISN'T  #
+# GUARANTEED TO GIVE YOU A GROUND STATE SYMMETRIC IN THE SPINS! THIS IS A PARTICULAR ISSUE FOR L=8 AND HALF FILLING!   #
+# WORKAROUNDS ARE TO INCLUDE A TINY AMOUNT OF U OR SPIN ORBIT.                                                         #
+########################################################################################################################
+
+print("calculating ground state")
+E, psi_0 = ham.eigsh(k=1, which='SA')
+E2, psi_02 = ham2.eigsh(k=1, which='SA')
+print("ground state calculated, energy is {:.2f}".format(E[0]))
+print('evolving system')
+ti = time()
+"""evolving system. In this simple case we'll just use the built in solver"""
+psi_t = ham.evolve(psi_0, 0.0, times)
+psi_t = np.squeeze(psi_t)
+
+psi_t2 = ham2.evolve(psi_02, 0.0, times)
+psi_t2 = np.squeeze(psi_t2)
+print("Evolution done! This one took {:.2f} seconds".format(time() - ti))
+ti = time()
+expectationslu1 = operator_dict['lhopup'].expt_value(psi_t, times)
+expectationsld1 = operator_dict['lhopdown'].expt_value(psi_t, times)
+expectationslu2 = operator_dict['lhopup_l2'].expt_value(psi_t, times)
+expectationsld2 = operator_dict['lhopdown_l2'].expt_value(psi_t, times)
+expectationstu = operator_dict['thopup'].expt_value(psi_t, times)
+expectationstd = operator_dict['thopdown'].expt_value(psi_t, times)
+
+expectationslu12 = operator_dict2['lhopup'].expt_value(psi_t2, times)
+expectationsld12 = operator_dict2['lhopdown'].expt_value(psi_t2, times)
+expectationslu22 = operator_dict2['lhopup_l2'].expt_value(psi_t2, times)
+expectationsld22 = operator_dict2['lhopdown_l2'].expt_value(psi_t2, times)
+current_partial = (expectationslu1 + expectationsld1 + expectationslu2 + expectationsld2)
+
+current_partial2 = (expectationslu12 + expectationsld12 + expectationslu22 + expectationsld22)
+# current_partial_1 = (expectationslu1 + expectationsld1)
+# current_partial_2 = (expectationslu2 + expectationsld2)
+current = -1j * lat.a * (current_partial - current_partial.conjugate())
+current2 = -1j * lat.a * (current_partial2 - current_partial2.conjugate())
+# current_1 = -1j * lat.a * (current_partial_1 - current_partial_1.conjugate())
+# current_2 = -1j * lat.a * (current_partial_2 - current_partial_2.conjugate())
+current_partial_perp = (expectationstu + expectationstd)
+current_perp = 1j * lat.a * (current_partial_perp - current_partial_perp.conjugate())
+print("Expectations calculated! This took {:.2f} seconds".format(time() - ti))
+print('All finished. Total time was {:.2f} seconds using {:d} threads'.format((time() - t_init), threads))
+
+# plt.plot(times, expectationslu1.imag, times, expectationsld1.imag)
+# plt.show()
+# plt.plot(times, expectationslu2.imag, times, expectationsld2.imag)
+# plt.show()
+# plt.plot(times, current)
+# plt.show()
+# plt.plot(times, current_1, times, current_2)
+# plt.show()
+# plt.plot(times, expectationstu.imag, times, expectationstd.imag)
+# plt.show()
+# plt.plot(times, current_perp)
+# plt.show()
+
+def spectrum_welch(at, delta):
+    return signal.welch(at, 1. / delta, nperseg=len(at), scaling='spectrum')
+
+
+import sys
+import numpy as np
+import itertools
+import matplotlib.pyplot as plt
+import numpy.ma as ma
+from matplotlib import cm as cm
+from scipy.signal import blackman
+from scipy.signal import stft
+from scipy.signal import savgol_filter
+from scipy.interpolate import interp1d
+from scipy import signal
+
+J_field = current.real
+J_field2 = current2.real
+prev_max = 0
+
+plt.subplot(211)
+plt.plot(times, J_field, times, J_field2)
+# plt.xlabel('Time [cycles]')
+plt.ylabel('$J(t)$')
+plt.xlabel('Time [cycles]')
+plt.legend(loc='upper right')
+
+plt.subplot(212)
+method = 'welch'
+min_spec = 20
+max_harm = 60
+gabor = 'fL'
+exact = np.gradient(J_field, delta)
+exact2 = np.gradient(J_field2, delta)
+w, spec = spectrum_welch(exact, delta)
+w, spec2 = spectrum_welch(exact2, delta)
+w *= 2. * np.pi / lat.field
+plt.semilogy(w, spec, w, spec2, label='$J(t)$')
+axes = plt.gca()
+axes.set_xlim([0, max_harm])
+if spec.max() > prev_max:
+    prev_max=spec.max()*5
+axes.set_ylim([10 ** (-min_spec), prev_max])
+xlines = [2 * i - 1 for i in range(1, 6)]
+
+for xc in xlines:
+    plt.axvline(x=xc, color='black', linestyle='dashed')
+plt.xlabel('Harmonic Order')
+plt.ylabel('HHG spectra')
+# plt.legend(loc='upper right')
+plt.show()
