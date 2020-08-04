@@ -299,9 +299,9 @@ ham5 = hamiltonian(static_Hamiltonian_list5, dynamic_Hamiltonian_list, basis=bas
 """build up the other operator expectations here as a dictionary"""
 operator_dict = dict(H=ham)
 operator_dict2 = dict(H=ham2)
-operator_dict3 = dict(H=ham2)
-operator_dict4 = dict(H=ham2)
-operator_dict5 = dict(H=ham2)
+operator_dict3 = dict(H=ham3)
+operator_dict4 = dict(H=ham4)
+operator_dict5 = dict(H=ham5)
 no_checks = dict(check_pcon=False, check_symm=False, check_herm=False)
 # hopping operators for building current. Note that the easiest way to build an operator is just to cast it as an
 # instance of the Hamiltonian class. Note in this instance the hops up and down have the e^iphi factor attached directly
