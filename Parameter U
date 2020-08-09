@@ -148,7 +148,7 @@ outfile = './Data/expectations{}sites-{}up-{}down-{}t0-{}U-{}SO-{}cycles-{}steps
                                                                                            n_steps, pbc)
 
 """create basis"""
-basis = spinful_fermion_basis_1d(N_sites, Nf=(N_up, N_down))
+basis = spinful_fermion_basis_1d(N_sites, Nf=(N_up, N_down), sblock=1)
 # print(basis)
 #
 """building model"""
