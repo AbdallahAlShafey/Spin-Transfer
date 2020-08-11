@@ -128,7 +128,7 @@ print("Hop Left = ", hop_left)
 print("Hop Right = ", hop_right)
 print("Interaction = ", interaction)
 
-"""Mobius Topology"""
+"""Open B.C."""
 Hop_left = [[-J, i, Tx_opn1[i]] for i in range(len(Tx_opn1))]
 Hop_left.extend([[-J, (Lx + i), Tx_opn2[i]] for i in range(len(Tx_opn2))])
 Hop_right = [[+J, i, Tx_opn1[i]] for i in range(len(Tx_opn1))]
