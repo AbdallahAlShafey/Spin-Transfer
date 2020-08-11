@@ -89,6 +89,8 @@ import numpy as np # general math functions
 ###### define model parameters ######
 Lx, Ly = 5, 2 # linear dimension of spin 1 2d lattice
 N_2d = Lx*Ly # number of sites for spin 1
+N_up = N_2d // 2  # number of fermions with spin up
+N_down = N_2d // 2  # number of fermions with spin down
 #
 J=1.0 # hopping matrix element
 g=0. # perpendicular hopping
