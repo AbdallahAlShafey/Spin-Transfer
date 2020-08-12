@@ -304,7 +304,7 @@ from scipy import signal
 
 J_field_1 = current_1.real
 J_field_2 = current_2.real
-J_field_3 = current_4.real
+J_field_3 = current_3.real
 J_field_4 = current_4.real
 J_field_5 = current_5.real
 J_field_6 = current_6.real
