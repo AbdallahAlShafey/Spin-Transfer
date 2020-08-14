@@ -184,8 +184,6 @@ expectations_down_c = operator_dict_c['lhopdown'].expt_value(psi_t_c, times)
 # expectations_up_m = operator_dict_m['lhopup'].expt_value(psi_t_m, times)
 # expectations_down_m = operator_dict_m['lhopdown'].expt_value(psi_t_m, times)
 
-plt.plot(times, (expectations_up_c-expectations_up_c.conjugate()).imag, times, (expectations_down_c-expectations_down_c.conjugate()).imag)
-plt.show()
 
 current_partial_c = (expectations_up_c + expectations_down_c)
 current_c = 1j*lat.a*(current_partial_c - current_partial_c.conjugate())
