@@ -162,8 +162,8 @@ dynamic_m=[
     ]
 
 # build hamiltonian
-H_c = hamiltonian(static, dynamic_c, basis=basis_2d, dtype=np.float64)
-H_m = hamiltonian(static, dynamic_m, basis=basis_2d_m, dtype=np.float64)
+H_c = hamiltonian(static, dynamic_c, basis=basis_2d, dtype=np.complex128)
+H_m = hamiltonian(static, dynamic_m, basis=basis_2d_m, dtype=np.complex128)
 # diagonalise H
 E_c, psi_0_c = H_c.eigsh(k=1, which='SA')
 psi_t_c = H_c.evolve(psi_0_c, 0.0, times)
