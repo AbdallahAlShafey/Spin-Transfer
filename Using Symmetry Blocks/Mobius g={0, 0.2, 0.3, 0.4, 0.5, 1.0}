@@ -1,0 +1,363 @@
+from __future__ import print_function, division
+import os
+import sys
+
+"""Open MP and MKL should speed up the time required to run these simulations!"""
+threads = 4
+os.environ['OMP_NUM_THREADS'] = '{}'.format(threads)
+os.environ['MKL_NUM_THREADS'] = '{}'.format(threads)
+
+from quspin.operators import hamiltonian, exp_op, quantum_operator  # operators
+from quspin.basis import spinful_fermion_basis_1d  # Hilbert space basis
+from quspin.tools.measurements import obs_vs_time  # calculating dynamics
+import numpy as np  # general math functions
+from scipy.sparse.linalg import eigsh
+from time import time  # tool for calculating computation time
+import matplotlib.pyplot as plt  # plotting library
+
+sys.path.append('../')
+from tools import parameter_instantiate as hhg  # Used for scaling units.
+#
+# t_init = time()
+#
+# #############################################################################
+# # This model labels lattice sites as in this following graph:               #
+# #                                                                           #
+# #                     = 6 = 7 = 8 = 9 = 10 = 11 =                           #
+# #                       |   |   |   |   |   |                               #
+# #                     - 0 - 1 - 2 - 3 - 4 - 5 -                             #
+# #                                                                           #
+# # where  - : t_1      (hopping strength in the bottom rung)                 #
+# #        = : t_2      (hopping strength in the top rung)                    #
+# #        | : t_p      (hopping strength between rungs)                      #
+# #############################################################################
+#
+# # Boundary conditions are set to be Mobius periodic along the leg and OBC perpendicular.
+#
+# """Hubbard model Parameters"""
+L = 4  # system size
+N_sites = 2 * L  # number of sites since it's a two-leg ladder
+N_up = N_sites // 2  # number of fermions with spin up
+N_down = N_sites // 2  # number of fermions with spin down
+N = N_up + N_down  # number of particles
+t0 = 0.52  # previously defined hopping strength
+t_p=0
+U=0
+SO=0
+pbc = True
+"""Laser pulse parameters"""
+field = 32.9  # field angular frequency THz
+F0 = 10  # Field amplitude MV/cm
+a = 4  # Lattice constant Angstroms
+
+"""instantiate parameters with proper unit scaling. In this case everything is scaled to units of t_0"""
+lat = hhg(field=field, nup=N_up, ndown=N_down, nx=N_sites//2, ny=2, U=U, SO=SO, t_p=t_p, t=t0, F0=F0, a=a, pbc=pbc)
+
+"""Define e^i*phi for later dynamics. Important point here is that for later implementations of tracking, we
+will pass phi as a global variable that will be modified as appropriate during evolution"""
+
+def phi(current_time):
+    phi = (lat.a * lat.F0 / lat.field) * (np.sin(lat.field * current_time / (2. * cycles)) ** 2.) * np.sin(
+        lat.field * current_time)
+    return phi
+
+
+def expiphi(current_time):
+    phi = (lat.a * lat.F0 / lat.field) * (np.sin(lat.field * current_time / (2. * cycles)) ** 2.) * np.sin(
+        lat.field * current_time)
+    return np.exp(1j * phi)
+
+
+def expiphiconj(current_time):
+    phi = (lat.a * lat.F0 / lat.field) * (np.sin(lat.field * current_time / (2. * cycles)) ** 2.) * np.sin(
+        lat.field * current_time)
+    return np.exp(-1j * phi)
+
+dynamic_args = []
+cycles = 10  # time in cycles of field frequency
+n_steps = 2000
+start = 0
+stop = cycles / lat.freq
+times, delta = np.linspace(start, stop, num=n_steps, endpoint=True, retstep=True)
+no_checks = dict(check_pcon=False, check_symm=False, check_herm=False)
+
+
+from quspin.operators import hamiltonian # operators
+from quspin.basis import spinful_fermion_basis_general # spin basis constructor
+import numpy as np # general math functions
+#
+###### define model parameters ######
+Lx, Ly = 5, 2 # linear dimension of spin 1 2d lattice
+N_2d = Lx*Ly # number of sites for spin 1
+N_up = N_2d // 2  # number of fermions with spin up
+N_down = N_2d // 2  # number of fermions with spin down
+#
+J = 1.0  # hopping matrix element
+g = 0  # perpendicular hopping
+g2 = 0.2  # perpendicular hopping
+g3 = 0.3  # perpendicular hopping
+g4 = 0.4  # perpendicular hopping
+g5 = 0.5  # perpendicular hopping
+g6 = 1  # perpendicular hopping
+U_a = 0  # Mott onsite interaction
+U_b = 0  # Metal onsite interaction
+
+U = []
+U.extend([U_a for i in range(0, Lx)])
+U. extend([U_b for i in range(Lx, N_2d)])
+
+print("U = ", U)
+#
+###### setting up user-defined BASIC symmetry transformations for 2d lattice ######
+s = np.arange(N_2d)  # sites [0,1,2,...,N_2d-1] in simple notation
+x = s % Lx  # x positions for sites
+y = s//Lx  # y positions for sites
+Tx_mob = ((x+1) + Lx*y) % N_2d  # translation along x-direction (Mobius geometry)
+T_y = x + Lx * ((y+1) % Ly)  # translation along y-direction
+S = -(s+1)  # fermion spin inversion in the simple case
+
+
+###### setting up bases ######
+basis_2d = spinful_fermion_basis_general(N_2d, Nf=(N_up, N_down), kxblock=(Tx_mob, 0), sblock=(S, 0))
+###### setting up hamiltonians ######
+
+"""g = 0"""
+hop_left = [[-J, i, Tx_mob[i]] for i in range(N_2d)]
+hop_right = [[+J, i, Tx_mob[i]] for i in range(N_2d)]
+hop_top = [[-g, i, T_y[i]] for i in range(N_2d//2)]
+hop_bottom = [[+g, i, T_y[i]] for i in range(N_2d//2)]
+interaction=[[U[i], i, i] for i in range(N_2d)]
+print("Hop Left = ", hop_left)
+print("Hop Right = ", hop_right)
+print("Interaction = ", interaction)
+
+"""g = 0.5"""
+hop_top2 = [[-g2, i, T_y[i]] for i in range(N_2d//2)]
+hop_bottom2 = [[+g2, i, T_y[i]] for i in range(N_2d//2)]
+
+"""g = 1"""
+hop_top3 = [[-g3, i, T_y[i]] for i in range(N_2d//2)]
+hop_bottom3 = [[+g3, i, T_y[i]] for i in range(N_2d//2)]
+
+"""g = 2"""
+hop_top4 = [[-g4, i, T_y[i]] for i in range(N_2d//2)]
+hop_bottom4 = [[+g4, i, T_y[i]] for i in range(N_2d//2)]
+
+"""g = 3"""
+hop_top5 = [[-g5, i, T_y[i]] for i in range(N_2d//2)]
+hop_bottom5 = [[+g5, i, T_y[i]] for i in range(N_2d//2)]
+
+"""g = 4"""
+hop_top6 = [[-g6, i, T_y[i]] for i in range(N_2d//2)]
+hop_bottom6 = [[+g6, i, T_y[i]] for i in range(N_2d//2)]
+
+static1 = [
+        ["n|n", interaction],
+        ["+-|", hop_top],
+        ["-+|", hop_bottom],
+        ["|+-", hop_top],
+        ["|-+", hop_bottom]
+]
+
+static2 = [
+        ["n|n", interaction],
+        ["+-|", hop_top2],
+        ["-+|", hop_bottom2],
+        ["|+-", hop_top2],
+        ["|-+", hop_bottom2]
+]
+
+static3 = [
+        ["n|n", interaction],
+        ["+-|", hop_top3],
+        ["-+|", hop_bottom3],
+        ["|+-", hop_top3],
+        ["|-+", hop_bottom3]
+]
+
+static4 = [
+        ["n|n", interaction],
+        ["+-|", hop_top4],
+        ["-+|", hop_bottom4],
+        ["|+-", hop_top4],
+        ["|-+", hop_bottom4]
+]
+
+static5 = [
+        ["n|n", interaction],
+        ["+-|", hop_top5],
+        ["-+|", hop_bottom5],
+        ["|+-", hop_top5],
+        ["|-+", hop_bottom5]
+]
+
+static6 = [
+        ["n|n", interaction],
+        ["+-|", hop_top6],
+        ["-+|", hop_bottom6],
+        ["|+-", hop_top6],
+        ["|-+", hop_bottom6]
+]
+
+dynamic=[
+         ["+-|", hop_left, expiphiconj, dynamic_args],  # up hop left
+         ["-+|", hop_right, expiphi, dynamic_args],  # up hop right
+         ["|+-", hop_left, expiphiconj, dynamic_args],  # down hop left
+         ["|-+", hop_right, expiphi, dynamic_args]  # down hop right
+    ]
+
+
+# build hamiltonian
+H_1 = hamiltonian(static1, dynamic, basis=basis_2d, dtype=np.complex128)
+H_2 = hamiltonian(static2, dynamic, basis=basis_2d, dtype=np.complex128)
+H_3 = hamiltonian(static3, dynamic, basis=basis_2d, dtype=np.complex128)
+H_4 = hamiltonian(static4, dynamic, basis=basis_2d, dtype=np.complex128)
+H_5 = hamiltonian(static5, dynamic, basis=basis_2d, dtype=np.complex128)
+H_6 = hamiltonian(static6, dynamic, basis=basis_2d, dtype=np.complex128)
+
+# diagonalise H
+E_1, psi_0_1 = H_1.eigsh(k=1, which='SA')
+psi_t_1 = H_1.evolve(psi_0_1, 0.0, times)
+psi_t_1 = np.squeeze(psi_t_1)
+
+E_2, psi_0_2 = H_2.eigsh(k=1, which='SA')
+psi_t_2 = H_2.evolve(psi_0_2, 0.0, times)
+psi_t_2 = np.squeeze(psi_t_2)
+
+E_3, psi_0_3 = H_3.eigsh(k=1, which='SA')
+psi_t_3 = H_3.evolve(psi_0_3, 0.0, times)
+psi_t_3 = np.squeeze(psi_t_3)
+
+E_4, psi_0_4 = H_4.eigsh(k=1, which='SA')
+psi_t_4 = H_4.evolve(psi_0_4, 0.0, times)
+psi_t_4 = np.squeeze(psi_t_4)
+
+E_5, psi_0_5 = H_5.eigsh(k=1, which='SA')
+psi_t_5 = H_5.evolve(psi_0_5, 0.0, times)
+psi_t_5 = np.squeeze(psi_t_5)
+
+E_6, psi_0_6 = H_6.eigsh(k=1, which='SA')
+psi_t_6 = H_6.evolve(psi_0_6, 0.0, times)
+psi_t_6 = np.squeeze(psi_t_6)
+
+operator_dict_1 = dict(H=H_1)
+operator_dict_2 = dict(H=H_2)
+operator_dict_3 = dict(H=H_3)
+operator_dict_4 = dict(H=H_4)
+operator_dict_5 = dict(H=H_5)
+operator_dict_6 = dict(H=H_6)
+
+operator_dict_1["lhopup"] = hamiltonian([], [["+-|", hop_left, expiphiconj, dynamic_args]], basis=basis_2d, **no_checks)
+operator_dict_1["lhopdown"] = hamiltonian([], [["|+-", hop_left, expiphiconj, dynamic_args]], basis=basis_2d, **no_checks)
+operator_dict_2["lhopup"] = hamiltonian([], [["+-|", hop_left, expiphiconj, dynamic_args]], basis=basis_2d, **no_checks)
+operator_dict_2["lhopdown"] = hamiltonian([], [["|+-", hop_left, expiphiconj, dynamic_args]], basis=basis_2d, **no_checks)
+operator_dict_3["lhopup"] = hamiltonian([], [["+-|", hop_left, expiphiconj, dynamic_args]], basis=basis_2d, **no_checks)
+operator_dict_3["lhopdown"] = hamiltonian([], [["|+-", hop_left, expiphiconj, dynamic_args]], basis=basis_2d, **no_checks)
+operator_dict_4["lhopup"] = hamiltonian([], [["+-|", hop_left, expiphiconj, dynamic_args]], basis=basis_2d, **no_checks)
+operator_dict_4["lhopdown"] = hamiltonian([], [["|+-", hop_left, expiphiconj, dynamic_args]], basis=basis_2d, **no_checks)
+operator_dict_5["lhopup"] = hamiltonian([], [["+-|", hop_left, expiphiconj, dynamic_args]], basis=basis_2d, **no_checks)
+operator_dict_5["lhopdown"] = hamiltonian([], [["|+-", hop_left, expiphiconj, dynamic_args]], basis=basis_2d, **no_checks)
+operator_dict_6["lhopup"] = hamiltonian([], [["+-|", hop_left, expiphiconj, dynamic_args]], basis=basis_2d, **no_checks)
+operator_dict_6["lhopdown"] = hamiltonian([], [["|+-", hop_left, expiphiconj, dynamic_args]], basis=basis_2d, **no_checks)
+
+expectations_up_1 = operator_dict_1['lhopup'].expt_value(psi_t_1, times)
+expectations_down_1 = operator_dict_1['lhopdown'].expt_value(psi_t_1, times)
+expectations_up_2 = operator_dict_2['lhopup'].expt_value(psi_t_2, times)
+expectations_down_2 = operator_dict_2['lhopdown'].expt_value(psi_t_2, times)
+expectations_up_3 = operator_dict_3['lhopup'].expt_value(psi_t_3, times)
+expectations_down_3 = operator_dict_3['lhopdown'].expt_value(psi_t_3, times)
+expectations_up_4 = operator_dict_4['lhopup'].expt_value(psi_t_4, times)
+expectations_down_4 = operator_dict_4['lhopdown'].expt_value(psi_t_4, times)
+expectations_up_5 = operator_dict_5['lhopup'].expt_value(psi_t_5, times)
+expectations_down_5 = operator_dict_5['lhopdown'].expt_value(psi_t_5, times)
+expectations_up_6 = operator_dict_6['lhopup'].expt_value(psi_t_6, times)
+expectations_down_6 = operator_dict_6['lhopdown'].expt_value(psi_t_6, times)
+
+current_partial_1 = (expectations_up_1 + expectations_down_1)
+current_1 = 1j*lat.a*(current_partial_1 - current_partial_1.conjugate())
+current_partial_2 = (expectations_up_2 + expectations_down_2)
+current_2 = 1j*lat.a*(current_partial_2 - current_partial_2.conjugate())
+current_partial_3 = (expectations_up_3 + expectations_down_3)
+current_3 = 1j*lat.a*(current_partial_3 - current_partial_3.conjugate())
+current_partial_4 = (expectations_up_4 + expectations_down_4)
+current_4 = 1j*lat.a*(current_partial_4 - current_partial_4.conjugate())
+current_partial_5 = (expectations_up_5 + expectations_down_5)
+current_5 = 1j*lat.a*(current_partial_5 - current_partial_5.conjugate())
+current_partial_6 = (expectations_up_6 + expectations_down_6)
+current_6 = 1j*lat.a*(current_partial_6 - current_partial_6.conjugate())
+
+def spectrum_welch(at, delta):
+    return signal.welch(at, 1. / delta, nperseg=len(at), scaling='spectrum')
+
+import sys
+import numpy as np
+import itertools
+import matplotlib.pyplot as plt
+import numpy.ma as ma
+from matplotlib import cm as cm
+from scipy.signal import blackman
+from scipy.signal import stft
+from scipy.signal import savgol_filter
+from scipy.interpolate import interp1d
+from scipy import signal
+
+J_field_1 = current_1.real
+J_field_2 = current_2.real
+J_field_3 = current_3.real
+J_field_4 = current_4.real
+J_field_5 = current_5.real
+J_field_6 = current_6.real
+prev_max = 0
+
+plt.subplot(211)
+plt.plot(times, J_field_1, label='$Mobius, g=0$')
+plt.plot(times, J_field_2, label='$Mobius, g=0.2$')
+plt.plot(times, J_field_3, label='$Mobius, g=0.3$')
+plt.plot(times, J_field_4, label='$Mobius, g=0.4$')
+plt.plot(times, J_field_5, label='$Mobius, g=0.5$')
+plt.plot(times, J_field_6, label='$Mobius, g=1.0$')
+# plt.xlabel('Time [cycles]')
+plt.ylabel('$J(t)$')
+plt.xlabel('Time [cycles]')
+plt.legend(loc='upper right')
+
+plt.subplot(212)
+method = 'welch'
+min_spec = 20
+max_harm = 60
+gabor = 'fL'
+exact_1 = np.gradient(J_field_1, delta)
+exact_2 = np.gradient(J_field_2, delta)
+exact_3 = np.gradient(J_field_3, delta)
+exact_4 = np.gradient(J_field_4, delta)
+exact_5 = np.gradient(J_field_5, delta)
+exact_6 = np.gradient(J_field_6, delta)
+w, spec_1 = spectrum_welch(exact_1, delta)
+w, spec_2 = spectrum_welch(exact_2, delta)
+w, spec_3 = spectrum_welch(exact_3, delta)
+w, spec_4 = spectrum_welch(exact_4, delta)
+w, spec_5 = spectrum_welch(exact_5, delta)
+w, spec_6 = spectrum_welch(exact_6, delta)
+w *= 2. * np.pi / lat.field
+
+plt.semilogy(w, spec_1, label='$Mobius, g=0$')
+plt.semilogy(w, spec_2, label='$Mobius, g=0.2$')
+plt.semilogy(w, spec_3, label='$Mobius, g=0.3$')
+plt.semilogy(w, spec_4, label='$Mobius, g=0.4$')
+plt.semilogy(w, spec_5, label='$Mobius, g=0.5$')
+plt.semilogy(w, spec_6, label='$Mobius, g=1.0$')
+plt.legend(bbox_to_anchor=(1.05, 1), loc='upper right', borderaxespad=0.)
+plt.legend(loc='upper right')
+axes = plt.gca()
+axes.set_xlim([0, max_harm])
+if spec_1.max() > prev_max:
+    prev_max=spec_1.max()*5
+axes.set_ylim([10 ** (-min_spec), prev_max])
+xlines = [2 * i - 1 for i in range(1, 6)]
+
+for xc in xlines:
+    plt.axvline(x=xc, color='black', linestyle='dashed')
+plt.xlabel('Harmonic Order')
+plt.ylabel('HHG spectra')
+# plt.legend(loc='upper right')
+plt.show()
