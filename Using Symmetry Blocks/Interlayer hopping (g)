@@ -209,12 +209,12 @@ dynamic=[
 
 
 # build hamiltonian
-H_1 = hamiltonian(static1, dynamic, basis=basis_2d, dtype=np.float64)
-H_2 = hamiltonian(static2, dynamic, basis=basis_2d, dtype=np.float64)
-H_3 = hamiltonian(static3, dynamic, basis=basis_2d, dtype=np.float64)
-H_4 = hamiltonian(static4, dynamic, basis=basis_2d, dtype=np.float64)
-H_5 = hamiltonian(static5, dynamic, basis=basis_2d, dtype=np.float64)
-H_6 = hamiltonian(static6, dynamic, basis=basis_2d, dtype=np.float64)
+H_1 = hamiltonian(static1, dynamic, basis=basis_2d, dtype=np.complex128)
+H_2 = hamiltonian(static2, dynamic, basis=basis_2d, dtype=np.complex128)
+H_3 = hamiltonian(static3, dynamic, basis=basis_2d, dtype=np.complex128)
+H_4 = hamiltonian(static4, dynamic, basis=basis_2d, dtype=np.complex128)
+H_5 = hamiltonian(static5, dynamic, basis=basis_2d, dtype=np.complex128)
+H_6 = hamiltonian(static6, dynamic, basis=basis_2d, dtype=np.complex128)
 
 # diagonalise H
 E_1, psi_0_1 = H_1.eigsh(k=1, which='SA')
