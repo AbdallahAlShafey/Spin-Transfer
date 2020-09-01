@@ -94,7 +94,7 @@ N_down = N_2d // 2  # number of fermions with spin down
 print(N_up, N_down, N_2d)
 #
 J = 1.0  # hopping matrix element along chain
-g = 0  # perpendicular hopping
+g = 0.5  # perpendicular hopping
 U_a = 0  # Mott on-site interaction
 U_b = 0  # metal on-site interaction
 
@@ -113,7 +113,7 @@ Tx_mob = ((x+1) + Lx*y) % N_2d  # translation along x-direction (Mobius geometry
 S = -(s+1)  # fermion spin inversion in the simple case
 
 ###### setting up bases ######
-blocks = [dict(kxblock=(Tx_mob, kxblock), sblock=(S, 1)) for kxblock in range(N_2d)]  # blocks to project on to
+blocks = [dict(kxblock=(Tx_mob, kxblock), sblock=(S, 0)) for kxblock in range(N_2d)]  # blocks to project on to
 get_proj_kwargs = dict(pcon=True)
 baisis_args = (N_2d,)
 basis_kwargs = dict(Nf=(N_up, N_down))
@@ -173,16 +173,25 @@ dynamic_m = [
 # build hamiltonian
 H_block = block_ops(blocks, static, dynamic_m, basis_con=spinful_fermion_basis_general, basis_args=baisis_args, basis_kwargs=basis_kwargs, dtype=np.complex128, get_proj_kwargs=get_proj_kwargs)
 # H_c = hamiltonian(static, dynamic_c, basis=basis_2d, dtype=np.complex128)
-H_m = hamiltonian(static, dynamic_m, basis=basis_2d_t, dtype=np.complex128)
+# H_c_t = hamiltonian(static, dynamic_c, basis=basis_2d_t, dtype=np.complex128)
+H_m = hamiltonian(static, dynamic_m, basis=basis_2d, dtype=np.complex128)
+H_m_t = hamiltonian(static, dynamic_m, basis=basis_2d_t, dtype=np.complex128)
 
 # E_c, psi_0_c = H_c.eigsh(k=1, which='SA')
-# psi_t_c = H_block.evolve(psi_0_c, 0.0, times)
+# psi_0_c_full = []
+# k = 0
+# for i in range(basis_2d_t.Ns):
+#     if basis_2d_t[i] in basis_2d:
+#         psi_0_c_full.append([complex(psi_0_c[k])])
+#         k += 1
+#     else:
+#         psi_0_c_full.append([complex(0, 0)])
+# psi_0_c_full = np.asarray(psi_0_c_full)
+# psi_t_c = H_block.evolve(psi_0_c_full, 0.0, times)
 # psi_t_c = np.squeeze(psi_t_c)
 
-E_m, psi_0_m = H_m.eigsh(k=1, which='SA')
-# psi_t_m = H_block.evolve(psi_0_m, 0.0, times)
-# psi_t_m = np.squeeze(psi_t_m)
 
+E_m, psi_0_m = H_m.eigsh(k=1, which='SA')
 
 psi_0_m_full = []
 k = 0
@@ -198,19 +207,19 @@ print(type(psi_0_m_full[1]))
 psi_t_m = H_block.evolve(psi_0_m_full, 0.0, times)
 psi_t_m = np.squeeze(psi_t_m)
 
-# operator_dict_c = dict(H=H_c)
+# operator_dict_c = dict(H=H_c_t)
 #
-# operator_dict_c["lhopup"] = hamiltonian([], [["+-|", hop_left, expiphiconj, dynamic_args]], basis=basis_2d, **no_checks)
-# operator_dict_c["lhopdown"] = hamiltonian([], [["|+-", hop_left, expiphiconj, dynamic_args]], basis=basis_2d, **no_checks)
-# operator_dict_c["thopup"] = hamiltonian([["+-|", hop_top]], [], basis=basis_2d, **no_checks)
-# operator_dict_c["thopdown"] = hamiltonian([["+-|", hop_top]], [], basis=basis_2d, **no_checks)
+# operator_dict_c["lhopup"] = hamiltonian([], [["+-|", hop_left, expiphiconj, dynamic_args]], basis=basis_2d_t, **no_checks)
+# operator_dict_c["lhopdown"] = hamiltonian([], [["|+-", hop_left, expiphiconj, dynamic_args]], basis=basis_2d_t, **no_checks)
+# operator_dict_c["thopup"] = hamiltonian([["+-|", hop_top]], [], basis=basis_2d_t, **no_checks)
+# operator_dict_c["thopdown"] = hamiltonian([["+-|", hop_top]], [], basis=basis_2d_t, **no_checks)
 # for j in range(N_2d):
 #     # spin up densities for each site
-#     operator_dict_c["nup" + str(j)] = hamiltonian([["n|", [[1.0, j]]]], [], basis=basis_2d, **no_checks)
+#     operator_dict_c["nup" + str(j)] = hamiltonian([["n|", [[1.0, j]]]], [], basis=basis_2d_t, **no_checks)
 #     # spin down
-#     operator_dict_c["ndown" + str(j)] = hamiltonian([["|n", [[1.0, j]]]], [], basis=basis_2d, **no_checks)
+#     operator_dict_c["ndown" + str(j)] = hamiltonian([["|n", [[1.0, j]]]], [], basis=basis_2d_t, **no_checks)
 #     # doublon densities
-#     operator_dict_c["D" + str(j)] = hamiltonian([["n|n", [[1.0, j, j]]]], [], basis=basis_2d, **no_checks)
+#     operator_dict_c["D" + str(j)] = hamiltonian([["n|n", [[1.0, j, j]]]], [], basis=basis_2d_t, **no_checks)
 #
 # exp_c = []
 # keys_c = []
@@ -228,7 +237,7 @@ psi_t_m = np.squeeze(psi_t_m)
 
 
 
-operator_dict_m = dict(H=H_m)
+operator_dict_m = dict(H=H_m_t)
 
 operator_dict_m["lhopup"] = hamiltonian([], [["+-|", hop_left, expiphiconj, dynamic_args]], basis=basis_2d_t, **no_checks)
 operator_dict_m["lhopdown"] = hamiltonian([], [["|+-", hop_left, expiphiconj, dynamic_args]], basis=basis_2d_t, **no_checks)
