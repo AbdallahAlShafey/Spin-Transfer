@@ -149,7 +149,7 @@ dynamic_c = [
 H_block = block_ops(blocks, static, dynamic_c, basis_con=spinful_fermion_basis_general, basis_args=baisis_args, basis_kwargs=basis_kwargs, dtype=np.complex128, get_proj_kwargs=get_proj_kwargs)
 H_c = hamiltonian(static, dynamic_c, basis=basis_2d, dtype=np.complex128)
 
-E_c, psi_0_c = H_c.eigsh(k=1, which='SA')
+E_c, psi_0_c = H_c.eigsh(k=1, which='SA')  ############################# THE PROBLEM HERE IS THAT I CALCULATED THE GS IN THE UNRESTRICTED BASIS
 psi_t_c = H_block.evolve(psi_0_c, 0.0, times)
 psi_t_c = np.squeeze(psi_t_c)
 
