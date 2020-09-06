@@ -1,0 +1,435 @@
+from __future__ import print_function, division
+import os
+import sys
+from quspin.tools.block_tools import block_ops # dynamics in symmetry blocks
+"""Open MP and MKL should speed up the time required to run these simulations!"""
+threads = 4
+os.environ['OMP_NUM_THREADS'] = '{}'.format(threads)
+os.environ['MKL_NUM_THREADS'] = '{}'.format(threads)
+
+from quspin.operators import hamiltonian, exp_op, quantum_operator  # operators
+from quspin.basis import spinful_fermion_basis_1d  # Hilbert space basis
+from quspin.tools.measurements import obs_vs_time  # calculating dynamics
+import numpy as np  # general math functions
+from scipy.sparse.linalg import eigsh
+from time import time  # tool for calculating computation time
+import matplotlib.pyplot as plt  # plotting library
+
+sys.path.append('../')
+from tools import parameter_instantiate as hhg  # Used for scaling units.
+#
+# t_init = time()
+#
+# #############################################################################
+# # This model labels lattice sites as in this following graph:               #
+# #                                                                           #
+# #                     = 5 = 6 = 7 = 8 = 9 =                                 #
+# #                       |   |   |   |   |                                   #
+# #                     - 0 - 1 - 2 - 3 - 4 -                                 #
+# #                                                                           #
+# # where  - : t_1      (hopping strength in the bottom rung)                 #
+# #        = : t_2      (hopping strength in the top rung)                    #
+# #        | : t_p      (hopping strength between rungs)                      #
+# #############################################################################
+#
+# # Boundary conditions are set to be Mobius periodic along the leg and OBC perpendicular.
+#
+# """Hubbard model Parameters"""
+L = 4  # system size
+N_sites = 2 * L  # number of sites since it's a two-leg ladder
+N_up = N_sites // 2  # number of fermions with spin up
+N_down = N_sites // 2  # number of fermions with spin down
+N = N_up + N_down  # number of particles
+t0 = 0.52  # previously defined hopping strength
+t_p = 0
+U = 0
+SO = 0
+pbc = True
+"""Laser pulse parameters"""
+field = 32.9  # field angular frequency THz
+F0 = 10  # Field amplitude MV/cm
+a = 4  # Lattice constant Angstroms
+
+"""instantiate parameters with proper unit scaling. In this case everything is scaled to units of t_0"""
+lat = hhg(field=field, nup=N_up, ndown=N_down, nx=N_sites//2, ny=2, U=U, SO=SO, t_p=t_p, t=t0, F0=F0, a=a, pbc=pbc)
+
+"""Define e^i*phi for later dynamics. Important point here is that for later implementations of tracking, we
+will pass phi as a global variable that will be modified as appropriate during evolution"""
+
+def phi(current_time):
+    phi = 2**(-0.5) * (lat.a * lat.F0 / lat.field) * (np.sin(lat.field * current_time / (2. * cycles)) ** 2.) * np.sin(
+        lat.field * current_time)
+    return phi
+
+
+def expiphi(current_time):
+    phi = 2**(-0.5) * (lat.a * lat.F0 / lat.field) * (np.sin(lat.field * current_time / (2. * cycles)) ** 2.) * np.sin(
+        lat.field * current_time)
+    return np.exp(1j * phi)
+
+
+def expiphiconj(current_time):
+    phi = 2**(-0.5) * (lat.a * lat.F0 / lat.field) * (np.sin(lat.field * current_time / (2. * cycles)) ** 2.) * np.sin(
+        lat.field * current_time)
+    return np.exp(-1j * phi)
+
+dynamic_args = []
+cycles = 10  # time in cycles of field frequency
+n_steps = 2000
+start = 0
+stop = cycles / lat.freq
+times, delta = np.linspace(start, stop, num=n_steps, endpoint=True, retstep=True)
+no_checks = dict(check_pcon=False, check_symm=False, check_herm=False)
+
+
+from quspin.operators import hamiltonian  # operators
+from quspin.basis import spinful_fermion_basis_general  # spin basis constructor
+import numpy as np  # general math functions
+t_init = time()
+#
+###### define model parameters ######
+Lx, Ly = 5, 2  # linear dimensions
+N_2d = Lx*Ly  # number of sites
+N_up = N_2d // 2  # number of fermions with spin up
+N_down = N_2d // 2  # number of fermions with spin down
+print(N_up, N_down, N_2d)
+
+J = 1.0  # hopping matrix element along chain
+g = 0.5  # perpendicular hopping
+U_a = 0  # Mott on-site interaction
+U_b = 0  # metal on-site interaction
+
+U = []
+U.extend([U_b for i in range(0, Lx)])
+U.extend([U_a for i in range(Lx, N_2d)])
+print("U = ", U)
+
+###### setting up user-defined BASIC symmetry transformations for 2d lattice ######
+s = np.arange(N_2d)  # sites [0,1,2,...,N_2d-1] in simple notation
+x = s % Lx  # x positions for sites
+y = s//Lx  # y positions for sites
+T_x = (x+1) % Lx + Lx*y  # translation along x-direction
+T_y = x + Lx * ((y+1) % Ly)  # translation along y-direction
+Tx_mob = ((x+1) + Lx*y) % N_2d  # translation along x-direction (Mobius geometry)
+S = -(s+1)  # fermion spin inversion in the simple case
+
+###### setting up bases ######
+blocks = [dict(kxblock=(T_x, kxblock), sblock=(S, 0))                     # BLOCKS TO PROJECT ONTO (Cylinder)
+          for kxblock in range(Lx)]
+blocks_m = [dict(sblock=(S, 1))]                # BLOCKS TO PROJECT ONTO (Mobius)
+
+
+get_proj_kwargs = dict(pcon=True)                                         # ARGS FOR BLOCK HAMILTONIAN EVOLUTION
+basis_args = (N_2d,)
+basis_kwargs = dict(Nf=(N_up, N_down))
+
+
+basis_2d = spinful_fermion_basis_general(N_2d, Nf=(N_up, N_down),         # RESTRICTED SUBSPACE BASIS (Cylinder)
+                                         kxblock=(T_x, 0), sblock=(S, 0))
+basis_2d_m = spinful_fermion_basis_general(N_2d, Nf=(N_up, N_down),       # RESTRICTED SUBSPACE BASIS (Mobius)
+                                           sblock=(S, 1))
+
+basis_2d_t = spinful_fermion_basis_general(N_2d, Nf=(N_up, N_down))       # UNRESTRICTED HILBERT SPACE BASIS
+
+###### setting up hamiltonians ######
+
+"""Cylindrical Topology"""
+hop_left = [[-J, i, T_x[i]] for i in range(N_2d)]
+hop_right = [[+J, i, T_x[i]] for i in range(N_2d)]
+hop_top = [[g, i, T_y[i]] for i in range(N_2d//2)]
+hop_bottom = [[-g, i, T_y[i]] for i in range(N_2d//2)]
+interaction = [[U[i], i, i] for i in range(N_2d)]
+print("Hop Left (Cyl) = ", hop_left)
+print("Hop Right (Cyl) = ", hop_right)
+
+static = [
+        ["n|n", interaction],
+        # ["+-|", hop_top],  # up hop top
+        # ["-+|", hop_bottom],  # up hop bottom
+        # ["|+-", hop_top],  # down hop top
+        # ["|-+", hop_bottom]  # down hop bottom
+]
+
+dynamic_c = [
+         ["+-|", hop_left, expiphiconj, dynamic_args],      # up hop left
+         ["-+|", hop_right, expiphi, dynamic_args],         # up hop right
+         ["|+-", hop_left, expiphiconj, dynamic_args],      # down hop left
+         ["|-+", hop_right, expiphi, dynamic_args],         # down hop right
+         ["+-|", hop_top, expiphi, dynamic_args],           # up hop top
+         ["-+|", hop_bottom, expiphiconj, dynamic_args],    # up hop bottom
+         ["|+-", hop_top, expiphi, dynamic_args],           # down hop top
+         ["|-+", hop_bottom, expiphiconj, dynamic_args]     # down hop bottom
+    ]
+
+
+"""Mobius Topology"""
+hop_left_m = [[-J, i, Tx_mob[i]] for i in range(N_2d)]
+hop_right_m = [[+J, i, Tx_mob[i]] for i in range(N_2d)]
+hop_top = [[g, i, T_y[i]] for i in range(N_2d//2)]
+hop_bottom = [[-g, i, T_y[i]] for i in range(N_2d//2)]
+interaction = [[U[i], i, i] for i in range(N_2d)]
+print("Hop Left (Mob) = ", hop_left_m)
+print("Hop Right (Mob) = ", hop_right_m)
+
+
+static = [
+        ["n|n", interaction],
+        # ["+-|", hop_top],  # up hop top
+        # ["-+|", hop_bottom],  # up hop bottom
+        # ["|+-", hop_top],  # down hop top
+        # ["|-+", hop_bottom]  # down hop bottom
+]
+
+dynamic_m = [
+         ["+-|", hop_left_m, expiphiconj, dynamic_args],      # up hop left
+         ["-+|", hop_right_m, expiphi, dynamic_args],         # up hop right
+         ["|+-", hop_left_m, expiphiconj, dynamic_args],      # down hop left
+         ["|-+", hop_right_m, expiphi, dynamic_args],         # down hop right
+         ["+-|", hop_top, expiphi, dynamic_args],           # up hop top
+         ["-+|", hop_bottom, expiphiconj, dynamic_args],    # up hop bottom
+         ["|+-", hop_top, expiphi, dynamic_args],           # down hop top
+         ["|-+", hop_bottom, expiphiconj, dynamic_args]     # down hop bottom
+    ]
+print("Hop Top = ", hop_top)
+print("Hop Bottom = ", hop_bottom)
+print("Hop Top (Mobius) = ", hop_top)
+print("Hop Bottom (Mobius) = ", hop_bottom)
+# build hamiltonian
+H_block = block_ops(blocks, static, dynamic_c,                           # BLOCK DECOMPOSED HAMILTONIAN (FOR EVOLUTION)
+                    basis_con=spinful_fermion_basis_general,
+                    basis_args=basis_args, basis_kwargs=basis_kwargs,
+                    dtype=np.complex128, get_proj_kwargs=get_proj_kwargs)
+
+H_c = hamiltonian(static, dynamic_c,                                     # RESTRICTED SUBSPACE HAMILTONIAN (FOR GS CALC)
+                  basis=basis_2d, dtype=np.complex128)
+H_c_t = hamiltonian(static, dynamic_c,                                   # UNRESTRICTED HILBERT SPACE HAMILTONIAN
+                    basis=basis_2d_t, dtype=np.complex128)               # (FOR BUILDING OBSERVABLES DICTIONARY)
+
+H_m = hamiltonian(static, dynamic_m,                                     # RESTRICTED SUBSPACE HAMILTONIAN (FOR GS CALC)
+                  basis=basis_2d_m, dtype=np.complex128)
+H_m_t = hamiltonian(static, dynamic_m,                                   # UNRESTRICTED HILBERT SPACE HAMILTONIAN
+                    basis=basis_2d_t, dtype=np.complex128)               # (FOR BUILDING OBSERVABLES DICTIONARY)
+
+print("Calculating ground states...")
+E_c, psi_0_c = H_c.eigsh(k=1, which='SA')                                # CALCULATING GS IN RESTRICTED SUBSPACE
+
+E_m, psi_0_m = H_m.eigsh(k=1, which='SA')                                # CALCULATING GS IN RESTRICTED SUBSPACE
+
+psi_0_c_full = []                                                         # PROJECTING THE GS (CALCULATED IN THE
+k = 0                                                                     # RESTRICTED BASIS) BACK UP TO THE
+for i in range(basis_2d_t.Ns):                                            # UNRESTRICTED HILBERT SPACE
+    if basis_2d_t[i] in basis_2d:                                         #
+        psi_0_c_full.append([complex(psi_0_c[k])])                        #
+        k += 1                                                            #
+    else:                                                                 #
+        psi_0_c_full.append([complex(0, 0)])                              #
+psi_0_c_full = np.asarray(psi_0_c_full)                                   #
+psi_0_c_full = np.squeeze(psi_0_c_full)                                   #
+
+print('Evolving systems...')
+ti = time()
+psi_t_c = H_block.evolve(psi_0_c_full, 0.0, times)                        # EVOLVING THE GS BY FIRST PROJECTING ONTO
+psi_t_c = np.squeeze(psi_t_c)                                             # K-BLOCK SUBSPACES, EVOLVING EACH PROJECTION
+                                                                          # INDIVIDUALLY, THEN RECOMBINING
+
+# print(H_c_t.eigvalsh(time=0))
+# print(len(H_c_t.eigvalsh(time=0)))
+# print(H_c.eigvalsh(time=0))
+Eoc, psioc = H_c_t.eigsh(k=1, which='SA')
+print(E_c, Eoc)
+
+psi_0_m_full = []
+k = 0
+for i in range(basis_2d_t.Ns):
+    if basis_2d_t[i] in basis_2d_m:
+        psi_0_m_full.append([complex(psi_0_m[k])])
+        k += 1
+    else:
+        psi_0_m_full.append([complex(0, 0)])
+psi_0_m_full = np.asarray(psi_0_m_full)
+psi_t_m = H_block.evolve(psi_0_m_full, 0.0, times)
+psi_t_m = np.squeeze(psi_t_m)
+
+Eom, psiom = H_m_t.eigsh(k=1, which='SA')
+print(E_m, Eom)
+print("Evolution done! This one took {:.2f} seconds.".format(time() - ti))
+
+operator_dict_c = dict(H=H_c_t)
+
+operator_dict_c["lhopup"] = hamiltonian([], [["+-|", hop_left, expiphiconj, dynamic_args]], basis=basis_2d_t, **no_checks)
+operator_dict_c["lhopdown"] = hamiltonian([], [["|+-", hop_left, expiphiconj, dynamic_args]], basis=basis_2d_t, **no_checks)
+operator_dict_c["thopup"] = hamiltonian([], [["+-|", hop_top, expiphi, dynamic_args]], basis=basis_2d_t, **no_checks)
+operator_dict_c["thopdown"] = hamiltonian([], [["|+-", hop_top, expiphi, dynamic_args]], basis=basis_2d_t, **no_checks)
+for j in range(N_2d):
+    # spin up densities for each site
+    operator_dict_c["nup" + str(j)] = hamiltonian([["n|", [[1.0, j]]]], [], basis=basis_2d_t, **no_checks)
+    # spin down
+    operator_dict_c["ndown" + str(j)] = hamiltonian([["|n", [[1.0, j]]]], [], basis=basis_2d_t, **no_checks)
+    # doublon densities
+    operator_dict_c["D" + str(j)] = hamiltonian([["n|n", [[1.0, j, j]]]], [], basis=basis_2d_t, **no_checks)
+
+exp_c = []
+keys_c = []
+for i in operator_dict_c.keys():
+    keys_c.append(i)
+for i in keys_c:
+    exp_c.append(operator_dict_c[i].expt_value(psi_t_c, times))
+
+expectations_c = dict(zip(keys_c, exp_c))
+
+current_partial_c = (expectations_c['lhopup'] + expectations_c['lhopdown'])
+current_c = 1j*lat.a*(current_partial_c - current_partial_c.conjugate())
+currentp_partial_c = (expectations_c['thopup'] + expectations_c['thopdown'])
+currentp_c = 1j*lat.a*(currentp_partial_c - currentp_partial_c.conjugate())
+
+
+
+operator_dict_m = dict(H=H_m_t)
+
+operator_dict_m["lhopup"] = hamiltonian([], [["+-|", hop_left, expiphiconj, dynamic_args]], basis=basis_2d_t, **no_checks)
+operator_dict_m["lhopdown"] = hamiltonian([], [["|+-", hop_left, expiphiconj, dynamic_args]], basis=basis_2d_t, **no_checks)
+operator_dict_m["thopup"] = hamiltonian([], [["+-|", hop_top, expiphi, dynamic_args]], basis=basis_2d_t, **no_checks)
+operator_dict_m["thopdown"] = hamiltonian([], [["|+-", hop_top, expiphi, dynamic_args]], basis=basis_2d_t, **no_checks)
+for j in range(N_2d):
+    # spin up densities for each site
+    operator_dict_m["nup" + str(j)] = hamiltonian([["n|", [[1.0, j]]]], [], basis=basis_2d_t, **no_checks)
+    # spin down
+    operator_dict_m["ndown" + str(j)] = hamiltonian([["|n", [[1.0, j]]]], [], basis=basis_2d_t, **no_checks)
+    # doublon densities
+    operator_dict_m["D" + str(j)] = hamiltonian([["n|n", [[1.0, j, j]]]], [], basis=basis_2d_t, **no_checks)
+
+exp_m = []
+keys_m = []
+for i in operator_dict_m.keys():
+    keys_m.append(i)
+for i in keys_m:
+    exp_m.append(operator_dict_m[i].expt_value(psi_t_m, times))
+
+expectations_m = dict(zip(keys_m, exp_m))
+
+current_partial_m = (expectations_m['lhopup'] + expectations_m['lhopdown'])
+current_m = 1j*lat.a*(current_partial_m - current_partial_m.conjugate())
+currentp_partial_m = (expectations_m['thopup'] + expectations_m['thopdown'])
+currentp_m = 1j*lat.a*(currentp_partial_m - currentp_partial_m.conjugate())
+
+print('All finished. Total time was {:.2f} seconds using {:d} threads.'.format((time() - t_init), threads))
+
+def spectrum_welch(at, delta):
+    return signal.welch(at, 1. / delta, nperseg=len(at), scaling='spectrum')
+
+import sys
+import numpy as np
+import itertools
+import matplotlib.pyplot as plt
+import numpy.ma as ma
+from matplotlib import cm as cm
+from scipy.signal import blackman
+from scipy.signal import stft
+from scipy.signal import savgol_filter
+from scipy.interpolate import interp1d
+from scipy import signal
+
+J_field_c = current_c.real
+Jp_field_c = currentp_c.real
+up_densities_c = np.vstack([expectations_c["nup" + str(j)].real for j in range(N_2d)]).T
+down_densities_c = np.vstack([expectations_c["ndown" + str(j)].real for j in range(N_2d)]).T
+
+J_field_m = current_m.real
+Jp_field_m = currentp_m.real
+up_densities_m = np.vstack([expectations_m["nup" + str(j)].real for j in range(N_2d)]).T
+down_densities_m = np.vstack([expectations_m["ndown" + str(j)].real for j in range(N_2d)]).T
+# print(up_densities_m[0, 1])
+# for i in range(len(up_densities_m[0, :])):
+#         up_densities_m[0,j] = round(up_densities_m[0,j], 2)
+# print(up_densities_m[0, 1])
+from matplotlib.ticker import FormatStrFormatter
+"""plot spin densities"""
+
+fig, ax = plt.subplots()
+# ax.yaxis.set_major_formatter(FormatStrFormatter('%.3f'))
+# ax.yaxis.set_ticks(np.arange(2.3, 2.4, 0.025))
+sites = range(1, N_2d+1)
+# plt.subplot(211)
+plt.plot(sites, up_densities_c[0, :], '--x', label=r'Cylinder $\langle n_{\uparrow j} \rangle$')
+plt.plot(sites, down_densities_c[0, :], '-.x', label=r'Cylinder $\langle n_{\downarrow j} \rangle$')
+plt.ylabel('$\\frac{U_b}{t_0}= %.1f$' % (U_a / J))
+# plt.subplot(212)
+plt.plot(sites, up_densities_m[0, :], '--x', label=r'Mobius $\langle n_{\uparrow j} \rangle$')
+plt.plot(sites, down_densities_m[0, :], '-.x', label=r'Mobius $\langle n_{\downarrow j} \rangle$')
+plt.legend(loc="upper right")
+plt.ylabel('$\\frac{U_b}{t_0}= %.1f$' % (U_a / t0))
+plt.title('Groundstates')
+plt.show()
+###################################################################################################
+prev_max = 0
+
+plt.subplot(211)
+plt.plot(times, J_field_c, label='Cylinder')
+plt.plot(times, J_field_m, label='Mobius')
+plt.ylabel('$J(t)$')
+plt.xlabel('Time [cycles]')
+plt.legend(loc='upper right')
+
+plt.subplot(212)
+method = 'welch'
+min_spec = 20
+max_harm = 60
+gabor = 'fL'
+exact_c = np.gradient(J_field_c, delta)
+w, spec_c = spectrum_welch(exact_c, delta)
+exact_m = np.gradient(J_field_m, delta)
+w, spec_m = spectrum_welch(exact_m, delta)
+w *= 2. * np.pi / lat.field
+plt.semilogy(w, spec_c, label='Cylinder')
+plt.semilogy(w, spec_m, label='Mobius')
+plt.legend(bbox_to_anchor=(1.05, 1), loc='upper right', borderaxespad=0.)
+plt.legend(loc='upper right')
+axes = plt.gca()
+axes.set_xlim([0, max_harm])
+if spec_c.max() > prev_max:
+    prev_max = spec_c.max()*5
+axes.set_ylim([10 ** (-min_spec), prev_max])
+xlines = [2 * i - 1 for i in range(1, 6)]
+
+for xc in xlines:
+    plt.axvline(x=xc, color='black', linestyle='dashed')
+plt.xlabel('Harmonic Order')
+plt.ylabel('HHG spectra')
+plt.show()
+
+###################################################################################################
+plt.subplot(211)
+plt.plot(times, Jp_field_c, label='Cylinder')
+plt.plot(times, Jp_field_m, label='Mobius')
+plt.ylabel('$J_{perp}(t)$')
+plt.xlabel('Time [cycles]')
+plt.legend(loc='upper right')
+
+plt.subplot(212)
+method = 'welch'
+min_spec = 20
+max_harm = 60
+gabor = 'fL'
+exact_c = np.gradient(Jp_field_c, delta)
+w, spec_c = spectrum_welch(exact_c, delta)
+exact_m = np.gradient(Jp_field_m, delta)
+w, spec_m = spectrum_welch(exact_m, delta)
+w *= 2. * np.pi / lat.field
+plt.semilogy(w, spec_c, label='Cylinder')
+plt.semilogy(w, spec_m, label='Mobius')
+plt.legend(bbox_to_anchor=(1.05, 1), loc='upper right', borderaxespad=0.)
+plt.legend(loc='upper right')
+axes = plt.gca()
+axes.set_xlim([0, max_harm])
+if spec_c.max() > prev_max:
+    prev_max = spec_c.max()*5
+axes.set_ylim([10 ** (-min_spec), prev_max])
+xlines = [2 * i - 1 for i in range(1, 6)]
+
+for xc in xlines:
+    plt.axvline(x=xc, color='black', linestyle='dashed')
+plt.xlabel('Harmonic Order')
+plt.ylabel('HHG spectra')
+plt.show()
+
+##########################################################
