@@ -200,6 +200,11 @@ H_block = block_ops(blocks, static, dynamic_c,                           # BLOCK
                     basis_args=basis_args, basis_kwargs=basis_kwargs,
                     dtype=np.complex128, get_proj_kwargs=get_proj_kwargs)
 
+H_block_m = block_ops(blocks_m, static, dynamic_m,                           # BLOCK DECOMPOSED HAMILTONIAN (FOR EVOLUTION)
+                    basis_con=spinful_fermion_basis_general,
+                    basis_args=basis_args, basis_kwargs=basis_kwargs,
+                    dtype=np.complex128, get_proj_kwargs=get_proj_kwargs)
+
 H_c = hamiltonian(static, dynamic_c,                                     # RESTRICTED SUBSPACE HAMILTONIAN (FOR GS CALC)
                   basis=basis_2d, dtype=np.complex128)
 H_c_t = hamiltonian(static, dynamic_c,                                   # UNRESTRICTED HILBERT SPACE HAMILTONIAN
@@ -247,7 +252,7 @@ for i in range(basis_2d_t.Ns):
     else:
         psi_0_m_full.append([complex(0, 0)])
 psi_0_m_full = np.asarray(psi_0_m_full)
-psi_t_m = H_block.evolve(psi_0_m_full, 0.0, times)
+psi_t_m = H_block_m.evolve(psi_0_m_full, 0.0, times)
 psi_t_m = np.squeeze(psi_t_m)
 
 Eom, psiom = H_m_t.eigsh(k=1, which='SA')
@@ -286,8 +291,8 @@ currentp_c = 1j*lat.a*(currentp_partial_c - currentp_partial_c.conjugate())
 
 operator_dict_m = dict(H=H_m_t)
 
-operator_dict_m["lhopup"] = hamiltonian([], [["+-|", hop_left, expiphiconj, dynamic_args]], basis=basis_2d_t, **no_checks)
-operator_dict_m["lhopdown"] = hamiltonian([], [["|+-", hop_left, expiphiconj, dynamic_args]], basis=basis_2d_t, **no_checks)
+operator_dict_m["lhopup"] = hamiltonian([], [["+-|", hop_left_m, expiphiconj, dynamic_args]], basis=basis_2d_t, **no_checks)
+operator_dict_m["lhopdown"] = hamiltonian([], [["|+-", hop_left_m, expiphiconj, dynamic_args]], basis=basis_2d_t, **no_checks)
 operator_dict_m["thopup"] = hamiltonian([], [["+-|", hop_top, expiphi, dynamic_args]], basis=basis_2d_t, **no_checks)
 operator_dict_m["thopdown"] = hamiltonian([], [["|+-", hop_top, expiphi, dynamic_args]], basis=basis_2d_t, **no_checks)
 for j in range(N_2d):
