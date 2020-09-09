@@ -134,8 +134,8 @@ basis_2d_t = spinful_fermion_basis_general(N_2d, Nf=(N_up, N_down))       # UNRE
 ###### setting up hamiltonians ######
 
 """Cylindrical Topology"""
-hop_left = [[-J, i, T_x[i]] for i in range(N_2d)]
 hop_right = [[+J, i, T_x[i]] for i in range(N_2d)]
+hop_left = [[-J, i, T_x[i]] for i in range(N_2d)]
 hop_top = [[g, i, T_y[i]] for i in range(N_2d//2)]
 hop_bottom = [[-g, i, T_y[i]] for i in range(N_2d//2)]
 interaction = [[U[i], i, i] for i in range(N_2d)]
@@ -144,21 +144,21 @@ print("Hop Right (Cyl) = ", hop_right)
 
 static = [
         ["n|n", interaction],
-        ["+-|", hop_top],  # up hop top
-        ["-+|", hop_bottom],  # up hop bottom
-        ["|+-", hop_top],  # down hop top
-        ["|-+", hop_bottom]  # down hop bottom
+        ["-+|", hop_top],  # up hop top
+        ["+-|", hop_bottom],  # up hop bottom
+        ["|-+", hop_top],  # down hop top
+        ["|+-", hop_bottom]  # down hop bottom
 ]
 
 dynamic_c = [
-         ["+-|", hop_left, expiphiconj, dynamic_args],      # up hop left
          ["-+|", hop_right, expiphi, dynamic_args],         # up hop right
-         ["|+-", hop_left, expiphiconj, dynamic_args],      # down hop left
+         ["+-|", hop_left, expiphiconj, dynamic_args],      # up hop left
          ["|-+", hop_right, expiphi, dynamic_args],         # down hop right
-         # ["+-|", hop_top, expiphi, dynamic_args],           # up hop top
-         # ["-+|", hop_bottom, expiphiconj, dynamic_args],    # up hop bottom
-         # ["|+-", hop_top, expiphi, dynamic_args],           # down hop top
-         # ["|-+", hop_bottom, expiphiconj, dynamic_args]     # down hop bottom
+         ["|+-", hop_left, expiphiconj, dynamic_args],      # down hop left
+         # ["-+|", hop_top, expiphi, dynamic_args],           # up hop top
+         # ["+-|", hop_bottom, expiphiconj, dynamic_args],    # up hop bottom
+         # ["|-+", hop_top, expiphi, dynamic_args],           # down hop top
+         # ["|+-", hop_bottom, expiphiconj, dynamic_args]     # down hop bottom
     ]
 
 
@@ -174,21 +174,21 @@ print("Hop Right (Mob) = ", hop_right_m)
 
 static = [
         ["n|n", interaction],
-        # ["+-|", hop_top],  # up hop top
-        # ["-+|", hop_bottom],  # up hop bottom
-        # ["|+-", hop_top],  # down hop top
-        # ["|-+", hop_bottom]  # down hop bottom
+        # ["-+|", hop_top],  # up hop top
+        # ["+-|", hop_bottom],  # up hop bottom
+        # ["|-+", hop_top],  # down hop top
+        # ["|+-", hop_bottom]  # down hop bottom
 ]
 
 dynamic_m = [
-         ["+-|", hop_left_m, expiphiconj, dynamic_args],      # up hop left
          ["-+|", hop_right_m, expiphi, dynamic_args],         # up hop right
-         ["|+-", hop_left_m, expiphiconj, dynamic_args],      # down hop left
+         ["+-|", hop_left_m, expiphiconj, dynamic_args],      # up hop left
          ["|-+", hop_right_m, expiphi, dynamic_args],         # down hop right
-         # ["+-|", hop_top, expiphi, dynamic_args],           # up hop top
-         # ["-+|", hop_bottom, expiphiconj, dynamic_args],    # up hop bottom
-         # ["|+-", hop_top, expiphi, dynamic_args],           # down hop top
-         # ["|-+", hop_bottom, expiphiconj, dynamic_args]     # down hop bottom
+         ["|+-", hop_left_m, expiphiconj, dynamic_args],      # down hop left
+         # ["-+|", hop_top, expiphi, dynamic_args],           # up hop top
+         # ["+-|", hop_bottom, expiphiconj, dynamic_args],    # up hop bottom
+         # ["|-+", hop_top, expiphi, dynamic_args],           # down hop top
+         # ["|+-", hop_bottom, expiphiconj, dynamic_args]     # down hop bottom
     ]
 print("Hop Top = ", hop_top)
 print("Hop Bottom = ", hop_bottom)
