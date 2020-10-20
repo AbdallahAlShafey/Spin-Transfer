@@ -268,7 +268,7 @@ operator_dict_c = dict(H=H_c_t)
 operator_dict_c["lhopup"] = hamiltonian([], [["+-|", hop_left, expiphiconj, dynamic_args]], basis=basis_2d_t, **no_checks)
 operator_dict_c["lhopdown"] = hamiltonian([], [["|+-", hop_left, expiphiconj, dynamic_args]], basis=basis_2d_t, **no_checks)
 operator_dict_c["thopup"] = hamiltonian([], [["-+|", hop_top, expiphi, dynamic_args]], basis=basis_2d_t, **no_checks)
-operator_dict_c["thopdown"] = hamiltonian([], [["-+|", hop_top, expiphi, dynamic_args]], basis=basis_2d_t, **no_checks)
+operator_dict_c["thopdown"] = hamiltonian([], [["|-+", hop_top, expiphi, dynamic_args]], basis=basis_2d_t, **no_checks)
 for j in range(N_2d):
     # spin up densities for each site
     operator_dict_c["nup" + str(j)] = hamiltonian([["n|", [[1.0, j]]]], [], basis=basis_2d_t, **no_checks)
